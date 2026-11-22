@@ -22,14 +22,27 @@ struct ExerciseLibraryView: View {
             }
         }
         .navigationTitle("Exercises")
+        .overlay {
+            if exercises.isEmpty {
+                ContentUnavailableView(
+                    "No exercises",
+                    systemImage: "dumbbell",
+                    description: Text("Tap + to add your first exercise.")
+                )
+            }
+        }
         .toolbar {
+            // Both on the trailing side: this screen is pushed, so the
+            // leading slot belongs to the back button.
+            ToolbarItem(placement: .topBarTrailing) {
+                EditButton()
+                    .disabled(exercises.isEmpty)
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showAddSheet = true } label: {
                     Image(systemName: "plus")
                 }
-            }
-            ToolbarItem(placement: .topBarLeading) {
-                EditButton()
+                .accessibilityLabel("Add exercise")
             }
         }
         .sheet(isPresented: $showAddSheet) {
@@ -52,13 +65,17 @@ struct ExerciseDefRow: View {
                     .resizable()
                     .scaledToFill()
                     .frame(width: 38, height: 38)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             } else {
                 Image(systemName: def.sfSymbol)
                     .font(.title3)
                     .foregroundStyle(.tint)
                     .frame(width: 38, height: 38)
-                    .glassEffect(.regular.tint(AppTab.train.tint.opacity(0.22)), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .background(AppTab.train.tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .strokeBorder(AppTab.train.tint.opacity(0.16), lineWidth: 0.75)
+                    }
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(def.name)

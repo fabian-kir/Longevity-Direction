@@ -306,12 +306,12 @@ struct SetLoggerView: View {
                                 .font(.subheadline)
                             Image(systemName: "chevron.right")
                                 .font(.caption2)
-                                .foregroundStyle(set.id == selectedSetID ? Color.accentColor : .clear)
+                                .foregroundStyle(set.id == selectedSetID ? AppTab.train.tint : .clear)
                         }
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .listRowBackground(set.id == selectedSetID ? Color.accentColor.opacity(0.08) : nil)
+                    .listRowBackground(set.id == selectedSetID ? AppTab.train.tint.opacity(0.10) : nil)
                 }
                 .onDelete { sets.remove(atOffsets: $0) }
 
@@ -325,7 +325,9 @@ struct SetLoggerView: View {
                     Label("Add Set", systemImage: "plus")
                 }
             } header: {
-                Text("Sets — swipe left to delete")
+                Text("Sets")
+            } footer: {
+                Text("Swipe left on a set to delete it.")
             }
 
             if let idx = selectedIndex {
@@ -530,12 +532,12 @@ struct SetLoggerView: View {
                     yStart: .value("Lightest", p.lightest),
                     yEnd: .value("Heaviest", p.heaviest)
                 )
-                .foregroundStyle(Color.accentColor.opacity(0.12))
+                .foregroundStyle(AppTab.train.tint.opacity(0.12))
                 LineMark(
                     x: .value("Date", p.date, unit: .day),
                     y: .value("Heaviest", p.heaviest)
                 )
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(AppTab.train.tint)
                 .interpolationMethod(.catmullRom)
             }
             .chartYAxis { AxisMarks(position: .leading) }
@@ -617,14 +619,14 @@ struct SetLoggerView: View {
     private func weightPickerLabel(_ w: Double, isTarget: Bool) -> Text {
         let s = w.truncatingRemainder(dividingBy: 1) == 0 ? "\(Int(w))" : String(format: "%.1f", w)
         if isTarget {
-            return Text("\(Image(systemName: "target"))  \(s)").foregroundColor(.accentColor)
+            return Text("\(Image(systemName: "target"))  \(s)").foregroundColor(AppTab.train.tint)
         }
         return Text(s)
     }
 
     private func repsPickerLabel(_ r: Int, isTarget: Bool) -> Text {
         if isTarget {
-            return Text("\(Image(systemName: "target"))  \(r)").foregroundColor(.accentColor)
+            return Text("\(Image(systemName: "target"))  \(r)").foregroundColor(AppTab.train.tint)
         }
         return Text("\(r)")
     }

@@ -94,8 +94,13 @@ struct IntakeCard: View {
     private func header(_ summary: IntakeSummary) -> some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 2) {
-                Label(windowTitle(summary), systemImage: "flame.fill")
-                    .font(.headline)
+                Label {
+                    Text(summary.windowTitle)
+                } icon: {
+                    Image(systemName: "flame.fill")
+                        .foregroundStyle(.blue)
+                }
+                .font(.headline)
                 Text(windowSubtitle(summary))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -104,15 +109,6 @@ struct IntakeCard: View {
             Image(systemName: "slider.horizontal.3")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-        }
-    }
-
-    private func windowTitle(_ summary: IntakeSummary) -> String {
-        let length = summary.window.effectiveLength
-        switch summary.window.mode {
-        case .daily:   return "Today"
-        case .fixed:   return "\(length)-day block"
-        case .rolling: return "Last \(length) days"
         }
     }
 
@@ -150,7 +146,7 @@ struct IntakeCard: View {
                 if let progress {
                     Text(energyLabel(progress, kind: summary.targets.kind(for: .energy)))
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(color(for: progress))
+                        .foregroundStyle(progress.tint)
                         .monospacedDigit()
                 } else {
                     Text("Set a target")
@@ -161,7 +157,7 @@ struct IntakeCard: View {
 
             if let budget, let progress {
                 ProgressView(value: min(consumed / budget, 1))
-                    .tint(color(for: progress))
+                    .tint(progress.tint)
                     .accessibilityLabel("Calories")
                     .accessibilityValue("\(kcal(consumed)) of \(kcal(budget)) kcal")
             }
@@ -224,7 +220,7 @@ struct IntakeCard: View {
             }
             if let budget, let progress {
                 ProgressView(value: min(consumed / budget, 1))
-                    .tint(color(for: progress))
+                    .tint(progress.tint)
             } else {
                 // Keeps rows aligned when only some macros have a target.
                 ProgressView(value: 0)
@@ -267,14 +263,6 @@ struct IntakeCard: View {
 
     // MARK: - Formatting
 
-    private func color(for progress: IntakeProgress) -> Color {
-        switch progress {
-        case .remaining: .blue
-        case .reached:   .green
-        case .over:      .orange
-        }
-    }
-
     private func kcal(_ value: Double) -> String {
         Int(value.rounded()).formatted()
     }
@@ -285,6 +273,92 @@ struct IntakeCard: View {
 
     private func shortDate(_ date: Date) -> String {
         date.formatted(.dateTime.month(.abbreviated).day())
+    }
+}
+
+extension IntakeSummary {
+    var windowTitle: String {
+        let length = window.effectiveLength
+        switch window.mode {
+        case .daily:   return "Today"
+        case .fixed:   return "\(length)-day block"
+        case .rolling: return "Last \(length) days"
+        }
+    }
+}
+
+extension IntakeProgress {
+    var tint: Color {
+        switch self {
+        case .remaining: .blue
+        case .reached:   .green
+        case .over:      .orange
+        }
+    }
+}
+
+/// Calories and protein so far, for the dashboard peek under the camera.
+struct IntakePeekView: View {
+    let entries: [NutritionEntry]
+
+    private var preferences = IntakePreferences()
+
+    init(entries: [NutritionEntry]) {
+        self.entries = entries
+    }
+
+    var body: some View {
+        TimelineView(.everyMinute) { context in
+            content(IntakeEngine.summary(
+                entries: entries,
+                targets: preferences.targets,
+                window: preferences.window,
+                now: context.date
+            ))
+        }
+    }
+
+    private func content(_ summary: IntakeSummary) -> some View {
+        let consumed = summary.totals.energyKcal
+        let budget = summary.budget(for: .energy)
+        let protein = summary.totals[.protein]
+        let proteinBudget = summary.budget(for: .protein)
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .lastTextBaseline) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(summary.windowTitle)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(rounded(consumed))
+                            .font(.title2.weight(.bold))
+                        Text(budget.map { "/ \(rounded($0)) kcal" } ?? "kcal")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .monospacedDigit()
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(IntakeNutrient.protein.displayLabel)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(proteinBudget.map { "\(rounded(protein)) / \(rounded($0)) g" } ?? "\(rounded(protein)) g")
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+                }
+            }
+            if let budget, let progress = summary.progress(for: .energy) {
+                ProgressView(value: min(consumed / budget, 1))
+                    .tint(progress.tint)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func rounded(_ value: Double) -> String {
+        Int(value.rounded()).formatted()
     }
 }
 

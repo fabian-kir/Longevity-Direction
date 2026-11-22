@@ -46,7 +46,7 @@ struct EditNutritionEntrySheet: View {
                         WholeNumberFieldRow(
                             title: "Portion",
                             unit: "g",
-                            placeholder: entry.fingerprint?.typicalServingGrams.map { "\(Int($0))" } ?? "g",
+                            placeholder: entry.fingerprint?.typicalServingGrams.map { "\(Int($0)) g" } ?? "g",
                             value: $portionGrams
                         )
                     } footer: {
@@ -150,7 +150,7 @@ struct EditNutritionEntrySheet: View {
                     HStack {
                         Text(allergen.label)
                         if profile.source(of: allergen) == .ai {
-                            Text("AI").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                            SourceBadge(text: "AI")
                         }
                     }
                 }

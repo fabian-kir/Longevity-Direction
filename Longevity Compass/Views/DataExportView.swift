@@ -77,12 +77,8 @@ struct DataExportView: View {
                         .buttonStyle(.bordered)
                     }
                 }
-                HStack {
-                    Text("Model")
-                    Spacer()
-                    Label(HealthThresholds.OpenRouter.autoModelDisplayName, systemImage: "wand.and.stars")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tint)
+                LabeledContent("Model") {
+                    Text("\(Image(systemName: "wand.and.stars")) \(HealthThresholds.OpenRouter.autoModelDisplayName)")
                 }
 
                 if let digest = services.nutritionDigest {
@@ -251,7 +247,7 @@ struct DataExportView: View {
                 }
             }
         }
-        .navigationTitle("Data")
+        .navigationTitle("Settings")
         .task { await reloadScheduled() }
         .sheet(isPresented: $showDigestionOnboarding) {
             DigestionOnboardingView { services.startDigestionTracking() }

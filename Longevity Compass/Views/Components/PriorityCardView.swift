@@ -151,14 +151,7 @@ struct PriorityCardView: View {
     }
 
     private var statusTint: Color {
-        switch item.status {
-        case .urgent:        .red
-        case .bad:           .red
-        case .borderline:    .orange
-        case .good:          .green
-        case .missing:       .blue
-        case .unknown:       .gray
-        }
+        item.status.focusTint
     }
 }
 

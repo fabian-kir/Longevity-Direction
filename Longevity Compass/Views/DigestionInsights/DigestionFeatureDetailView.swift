@@ -21,8 +21,12 @@ struct DigestionFeatureDetailView: View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(row.kindLabel).font(.caption).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(row.name).font(.title3.weight(.semibold))
+                        Text(row.kindLabel).font(.subheadline).foregroundStyle(.secondary)
+                    }
                     DigestionLevelBadge(level: feature.level)
+                        .padding(.top, 2)
                     if let confounded = row.confoundedText {
                         Text(confounded).font(.footnote).foregroundStyle(.secondary)
                     }
@@ -173,9 +177,16 @@ struct DigestionLevelBadge: View {
             .font(.caption.weight(.semibold))
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .foregroundStyle(tint)
+            .foregroundStyle(level == .earlySignal ? Self.readableYellow : tint)
             .background(tint.opacity(0.15), in: Capsule())
     }
+
+    /// Plain yellow text is unreadable on a light background.
+    private static let readableYellow = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? .systemYellow
+            : UIColor(red: 0.60, green: 0.44, blue: 0.0, alpha: 1)
+    })
 
     private var tint: Color {
         switch level {

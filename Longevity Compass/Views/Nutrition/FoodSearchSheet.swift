@@ -93,20 +93,7 @@ private struct ProductSearchRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Group {
-                if let url = product.imageURL {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let img): img.resizable().scaledToFill()
-                        default: placeholder
-                        }
-                    }
-                } else {
-                    placeholder
-                }
-            }
-            .frame(width: 44, height: 44)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            ProductThumbnail(url: product.imageURL, size: 44)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(product.name ?? "Unknown product")
@@ -126,6 +113,30 @@ private struct ProductSearchRow: View {
                 }
             }
         }
+    }
+
+}
+
+/// Open Food Facts product photo, or a neutral placeholder.
+private struct ProductThumbnail: View {
+    let url: URL?
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let url {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let img): img.resizable().scaledToFill()
+                    default: placeholder
+                    }
+                }
+            } else {
+                placeholder
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
     }
 
     private var placeholder: some View {
@@ -208,14 +219,20 @@ struct ProductConfirmView: View {
     var body: some View {
         Form {
             Section("Product") {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(product.name ?? "Unknown product")
-                        .font(.headline)
-                        .lineLimit(2)
-                    if let brand = product.brand {
-                        Text(brand).font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    ProductThumbnail(url: product.imageURL, size: 56)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(product.name ?? "Unknown product")
+                            .font(.headline)
+                            .lineLimit(2)
+                        if let brand = product.brand {
+                            Text(brand).font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        Text(product.barcode)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .monospacedDigit()
                     }
-                    Text(product.barcode).font(.caption2).foregroundStyle(.tertiary)
                 }
             }
 
@@ -284,14 +301,7 @@ struct ProductConfirmView: View {
                 OpenFoodFactsAttribution()
             }
 
-            Section {
-                Button { save() } label: {
-                    Label("Save entry", systemImage: "checkmark.circle.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(isSaving)
-            }
+            FormPrimaryButton(title: "Save entry", isBusy: isSaving) { save() }
         }
         .navigationTitle(product.name ?? "Product")
         .navigationBarTitleDisplayMode(.inline)
@@ -339,10 +349,8 @@ struct ProductConfirmView: View {
     }
 
     private func row(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label)
-            Spacer()
-            Text(value).foregroundStyle(.secondary).monospacedDigit()
+        LabeledContent(label) {
+            Text(value).monospacedDigit()
         }
     }
 

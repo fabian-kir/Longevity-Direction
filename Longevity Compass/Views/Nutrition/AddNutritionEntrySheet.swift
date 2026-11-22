@@ -72,65 +72,59 @@ struct PostCaptureSheet: View {
     }
 
     private var analyzingView: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 20) {
             Image(uiImage: image)
                 .resizable()
                 .scaledToFit()
-                .frame(maxHeight: 220)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .frame(maxHeight: 260)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .padding(.horizontal)
-            ProgressView()
+            VStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.large)
+                Text("Identifying foods and portions…")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
         }
         .padding(.top, 12)
+        .frame(maxWidth: .infinity)
     }
 
     private func offlineView(message: String) -> some View {
-        VStack(spacing: 16) {
-            Image(systemName: "wifi.slash")
-                .font(.system(size: 36))
-                .foregroundStyle(.secondary)
+        ContentUnavailableView {
+            Label("You’re offline", systemImage: "wifi.slash")
+        } description: {
             Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
-            Spacer()
+        } actions: {
             Button("Done") {
                 onFinish(.queued)
                 dismiss()
             }
-            .buttonStyle(.borderedProminent)
-            .padding(.bottom)
+            .buttonStyle(.glassProminent)
         }
-        .padding(.top, 40)
     }
 
     private func failedView(message: String) -> some View {
-        VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 32))
-                .foregroundStyle(.orange)
+        ContentUnavailableView {
+            Label("Something went wrong", systemImage: "exclamationmark.triangle")
+        } description: {
             Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
+        } actions: {
             HStack(spacing: 10) {
                 Button("Retry") {
                     Task { await analyze() }
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 Button("Save for later") {
                     services.pendingMeals.enqueue(image: image, capturedAt: capturedAt)
                     onFinish(.queued)
                     dismiss()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
             }
-            Spacer()
         }
-        .padding(.top, 40)
     }
 
     private func fingerprintConfirm(analysis: MealFingerprintAnalysis) -> some View {
@@ -142,7 +136,7 @@ struct PostCaptureSheet: View {
                     .resizable()
                     .scaledToFit()
                     .frame(maxWidth: .infinity, maxHeight: 220)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
             .listRowInsets(EdgeInsets())
             .listRowBackground(Color.clear)
@@ -217,14 +211,8 @@ struct PostCaptureSheet: View {
                     }
                 }
             }
-            Section {
-                Button {
-                    saveFingerprint(analysis: analysis)
-                } label: {
-                    Label("Save entry", systemImage: "checkmark.circle.fill").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(isSaving)
+            FormPrimaryButton(title: "Save entry", isBusy: isSaving) {
+                saveFingerprint(analysis: analysis)
             }
         }
     }
@@ -239,10 +227,8 @@ struct PostCaptureSheet: View {
     }
 
     private func row(_ label: String, _ value: String?) -> some View {
-        HStack {
-            Text(label)
-            Spacer()
-            Text(value ?? "—").foregroundStyle(.secondary).monospacedDigit()
+        LabeledContent(label) {
+            Text(value ?? "—").monospacedDigit()
         }
     }
 

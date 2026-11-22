@@ -112,3 +112,37 @@ struct GlassPillButtonStyle: ButtonStyle {
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
+
+// MARK: - Form primary button
+//
+// Full-width primary action at the end of a Form, drawn on the grouped
+// background like the app's other bottom actions instead of inside a row card.
+
+struct FormPrimaryButton: View {
+    let title: String
+    var systemImage: String = "checkmark"
+    var isBusy: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Section {
+            Button(action: action) {
+                ZStack {
+                    Label(title, systemImage: systemImage)
+                        .opacity(isBusy ? 0 : 1)
+                    if isBusy {
+                        ProgressView()
+                            .tint(.white)
+                    }
+                }
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+            }
+            .buttonStyle(.glassProminent)
+            .disabled(isBusy)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+        }
+    }
+}

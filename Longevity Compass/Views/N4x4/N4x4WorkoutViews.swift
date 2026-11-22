@@ -267,29 +267,30 @@ struct N4x4WorkoutHistoryView: View {
 
     var body: some View {
         List {
+            ForEach(logs) { log in
+                NavigationLink {
+                    N4x4WorkoutDetailView(log: log)
+                } label: {
+                    N4x4WorkoutRow(log: log)
+                }
+                .swipeActions {
+                    Button("Delete", role: .destructive) {
+                        context.delete(log)
+                        try? context.save()
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .overlay {
             if logs.isEmpty {
                 ContentUnavailableView(
                     "No N4x4 workouts yet",
                     systemImage: "waveform.path.ecg",
                     description: Text("Completed and stopped sessions will appear here.")
                 )
-            } else {
-                ForEach(logs) { log in
-                    NavigationLink {
-                        N4x4WorkoutDetailView(log: log)
-                    } label: {
-                        N4x4WorkoutRow(log: log)
-                    }
-                    .swipeActions {
-                        Button("Delete", role: .destructive) {
-                            context.delete(log)
-                            try? context.save()
-                        }
-                    }
-                }
             }
         }
-        .listStyle(.insetGrouped)
         .navigationTitle("N4x4 history")
     }
 }
@@ -451,18 +452,22 @@ struct N4x4WorkoutRow: View {
                 Text(log.startedAt.formatted(date: .abbreviated, time: .shortened))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                HStack(spacing: 8) {
-                    Text(Self.clock(log.duration))
-                    if let average = log.averageHeartRate {
-                        Text("\(Int(average.rounded())) avg bpm")
-                    }
-                    if !log.isCompleted { Text("Stopped") }
-                }
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.tertiary)
+                Text(summary)
+                    .font(.caption2.weight(.medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 3)
+    }
+
+    private var summary: String {
+        var parts = [Self.clock(log.duration)]
+        if let average = log.averageHeartRate {
+            parts.append("\(Int(average.rounded())) avg bpm")
+        }
+        if !log.isCompleted { parts.append("Stopped") }
+        return parts.joined(separator: " · ")
     }
 
     private static func clock(_ seconds: TimeInterval) -> String {

@@ -13,11 +13,18 @@ final class PendingMealQueue {
         let imageFileName: String
         let capturedAt: Date
         var attempts: Int
+        /// Why the last attempt failed. Optional so older manifests still decode.
+        var lastError: String?
     }
 
     private(set) var pending: [PendingMeal] = []
     private(set) var isOnline: Bool = true
     private(set) var isProcessing: Bool = false
+    /// The meal being analysed right now, so the pending list can mark it.
+    private(set) var processingID: UUID?
+    /// False until the network monitor reports its first path. Meals left over
+    /// from an earlier launch are processed then, not before we know we're online.
+    private var hasCheckedPath = false
 
     private let openRouter: OpenRouterClient
     private let onEntryReady: (NutritionEntry) async -> Void
@@ -26,7 +33,7 @@ final class PendingMealQueue {
     private let monitorQueue = DispatchQueue(label: "meal.queue.monitor")
     private let fileManager = FileManager.default
 
-    private static let maxAttempts = 5
+    static let maxAttempts = 5
 
     init(openRouter: OpenRouterClient, onEntryReady: @escaping (NutritionEntry) async -> Void) {
         self.openRouter = openRouter
@@ -61,27 +68,53 @@ final class PendingMealQueue {
         }
     }
 
+    // MARK: - Manage
+
+    /// User-initiated retry. Also retries meals that used up their automatic attempts.
+    func retryAll() async {
+        await processQueue(includeExhausted: true)
+    }
+
+    /// Drops a queued meal and its photo without logging it.
+    func discard(_ meal: PendingMeal) {
+        remove(meal)
+    }
+
+    func image(for meal: PendingMeal) -> UIImage? {
+        UIImage(contentsOfFile: imageURL(for: meal.imageFileName).path)
+    }
+
     // MARK: - Process
 
-    func processQueue() async {
+    /// Meals that failed `maxAttempts` times are skipped unless `includeExhausted`
+    /// is set; they stay queued until the user retries or discards them.
+    func processQueue(includeExhausted: Bool = false) async {
         guard !isProcessing else { return }
         guard isOnline else { return }
         isProcessing = true
-        defer { isProcessing = false }
+        defer {
+            isProcessing = false
+            processingID = nil
+        }
 
-        var index = 0
-        while index < pending.count {
-            var meal = pending[index]
-            guard let image = UIImage(contentsOfFile: imageURL(for: meal.imageFileName).path) else {
-                remove(meal)
+        // Re-read `pending` each round: meals can be queued or discarded while
+        // a request is in flight.
+        var tried: Set<UUID> = []
+        while let queued = pending.first(where: {
+            !tried.contains($0.id) && (includeExhausted || $0.attempts < Self.maxAttempts)
+        }) {
+            tried.insert(queued.id)
+            guard let image = image(for: queued) else {
+                remove(queued)
                 continue
             }
-            meal.attempts += 1
-            pending[index] = meal
-            saveManifest()
+            processingID = queued.id
+            update(queued.id) { $0.attempts += 1 }
 
             do {
                 let analysis = try await MealAnalysisPipeline.analyze(image: image, openRouter: openRouter)
+                // Discarded while the request was running: don't log it.
+                guard let meal = pending.first(where: { $0.id == queued.id }) else { continue }
                 let storedImage = MealImageStore.ingest(jpegAt: imageURL(for: meal.imageFileName))
                 // Nobody confirms a weight for a queued meal, so the AI's typical
                 // serving stands in. The user can correct the portion later in
@@ -96,13 +129,9 @@ final class PendingMealQueue {
                 await onEntryReady(entry)
                 remove(meal)
             } catch {
-                if meal.attempts >= Self.maxAttempts {
-                    remove(meal)
-                } else {
-                    // Stop processing this round; try again on next connectivity event.
-                    index += 1
-                    break
-                }
+                update(queued.id) { $0.lastError = error.localizedDescription }
+                // Stop processing this round; try again on next connectivity event.
+                break
             }
         }
     }
@@ -151,6 +180,12 @@ final class PendingMealQueue {
         }
     }
 
+    private func update(_ id: UUID, _ change: (inout PendingMeal) -> Void) {
+        guard let index = pending.firstIndex(where: { $0.id == id }) else { return }
+        change(&pending[index])
+        saveManifest()
+    }
+
     private func remove(_ meal: PendingMeal) {
         pending.removeAll { $0.id == meal.id }
         try? fileManager.removeItem(at: imageURL(for: meal.imageFileName))
@@ -165,8 +200,10 @@ final class PendingMealQueue {
             Task { @MainActor in
                 guard let self else { return }
                 let wasOffline = !self.isOnline
+                let isFirstPath = !self.hasCheckedPath
                 self.isOnline = online
-                if online && wasOffline && !self.pending.isEmpty {
+                self.hasCheckedPath = true
+                if online && (wasOffline || isFirstPath) && !self.pending.isEmpty {
                     await self.processQueue()
                 }
             }

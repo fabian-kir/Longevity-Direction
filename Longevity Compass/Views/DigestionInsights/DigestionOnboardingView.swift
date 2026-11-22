@@ -8,28 +8,44 @@ struct DigestionOnboardingView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("What it does") {
-                    Text("Finds ingredients your symptoms tend to follow, and roughly how long after eating.")
+                Section {
+                    VStack(spacing: 14) {
+                        Image(systemName: "heart.text.clipboard")
+                            .font(.system(size: 44, weight: .semibold))
+                            .foregroundStyle(.tint)
+                            .accessibilityHidden(true)
+                        Text("Finds ingredients your symptoms tend to follow, and roughly how long after eating.")
+                            .font(.title3.weight(.semibold))
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .listRowBackground(Color.clear)
                 }
                 Section("What it can't do") {
-                    Label("It can't diagnose anything.", systemImage: "xmark.circle")
-                    Label("It can't see effects that build up over days or weeks.", systemImage: "xmark.circle")
-                    Label("It can't tell apart foods you always eat together.", systemImage: "xmark.circle")
-                    Label("It doesn't replace a doctor.", systemImage: "xmark.circle")
+                    limit("It can't diagnose anything.")
+                    limit("It can't see effects that build up over days or weeks.")
+                    limit("It can't tell apart foods you always eat together.")
+                    limit("It doesn't replace a doctor.")
                     Text("Results are statistics. AI meal recognition makes mistakes.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
                 Section("What it needs from you") {
-                    Label("Log every symptom. A day without an entry counts as a good day.", systemImage: "checkmark.circle")
-                    Label("Log your meals, including snacks and drinks.", systemImage: "checkmark.circle")
-                    Label("Fix the meal time if you log a meal later.", systemImage: "checkmark.circle")
-                    Label("Check detected allergens on meals you cooked.", systemImage: "checkmark.circle")
-                    Label("Expect weeks to months, not days.", systemImage: "checkmark.circle")
+                    need("Log every symptom. A day without an entry counts as a good day.")
+                    need("Log your meals, including snacks and drinks.")
+                    need("Fix the meal time if you log a meal later.")
+                    need("Check detected allergens on meals you cooked.")
+                    need("Expect weeks to months, not days.")
                 }
                 Section {
-                    Text("Talk to your doctor before changing your diet based on these results.")
-                        .font(.subheadline.weight(.semibold))
+                    Label {
+                        Text("Talk to your doctor before changing your diet based on these results.")
+                            .font(.subheadline.weight(.semibold))
+                    } icon: {
+                        Image(systemName: "stethoscope")
+                            .foregroundStyle(.tint)
+                    }
                 }
                 Section {
                     NavigationLink("How this works") { DigestionHowItWorksView() }
@@ -42,18 +58,38 @@ struct DigestionOnboardingView: View {
                     Button("Cancel") { dismiss() }
                 }
             }
-            .safeAreaInset(edge: .bottom) {
+            .safeAreaBar(edge: .bottom) {
                 Button {
                     onStart()
                     dismiss()
                 } label: {
                     Text("Start tracking")
+                        .font(.headline)
                         .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .padding()
+                .buttonStyle(.glassProminent)
+                .padding(.horizontal)
+                .padding(.vertical, 9)
             }
+        }
+    }
+
+    private func limit(_ text: String) -> some View {
+        Label {
+            Text(text)
+        } icon: {
+            Image(systemName: "xmark.circle.fill")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func need(_ text: String) -> some View {
+        Label {
+            Text(text)
+        } icon: {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.tint)
         }
     }
 }

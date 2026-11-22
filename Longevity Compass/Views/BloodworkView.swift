@@ -139,17 +139,16 @@ private struct BloodworkPanelRow: View {
                 Spacer()
                 flagBadge(panel.worstFlag)
             }
-            HStack(spacing: 6) {
-                if let lab = panel.labName, !lab.isEmpty {
-                    Text(lab)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Text("\(panel.markers.count) marker\(panel.markers.count == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
+    }
+
+    private var subtitle: String {
+        let markers = "\(panel.markers.count) marker\(panel.markers.count == 1 ? "" : "s")"
+        guard let lab = panel.labName, !lab.isEmpty else { return markers }
+        return "\(lab) · \(markers)"
     }
 
     @ViewBuilder

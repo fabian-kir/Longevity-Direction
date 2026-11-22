@@ -11,63 +11,64 @@ struct TrainingView: View {
 
     var body: some View {
         List {
+            if !weeklyBalance.isEmpty {
+                Section {
+                    let maxV = weeklyBalance.map(\.sets).max() ?? 1
+                    ForEach(weeklyBalance) { load in
+                        MuscleBalanceBar(
+                            label: load.region.displayName,
+                            fraction: maxV > 0 ? load.sets / maxV : 0,
+                            valueText: formattedSets(load.sets),
+                            tint: AppTab.train.tint
+                        )
+                        .padding(.vertical, 3)
+                    }
+                } header: {
+                    Label("This week", systemImage: "chart.bar.fill")
+                } footer: {
+                    Text("Weighted working sets by muscle group. Secondary muscles count half.")
+                }
+            }
+
+            ForEach(groupedEntries, id: \.key) { group in
+                Section {
+                    ForEach(group.value) { entry in
+                        ExerciseEntryRow(
+                            entry: entry,
+                            photoData: defs.first(where: { $0.name == entry.exerciseName })?.photoData
+                        )
+                            .onTapGesture { editingEntry = entry }
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    withAnimation {
+                                        context.delete(entry)
+                                        try? context.save()
+                                    }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                            .swipeActions(edge: .leading) {
+                                Button {
+                                    editingEntry = entry
+                                } label: {
+                                    Label("Edit", systemImage: "pencil")
+                                }
+                                .tint(.blue)
+                            }
+                    }
+                } header: {
+                    sessionHeader(for: group.key, entries: group.value)
+                }
+            }
+        }
+        .overlay {
             if allEntries.isEmpty {
                 ContentUnavailableView(
                     "No exercises yet",
                     systemImage: "figure.strengthtraining.traditional",
                     description: Text("Tap \"Log Exercise\" to record your first set.")
                 )
-            } else {
-                if !weeklyBalance.isEmpty {
-                    Section {
-                        let maxV = weeklyBalance.map(\.sets).max() ?? 1
-                        ForEach(weeklyBalance) { load in
-                            MuscleBalanceBar(
-                                label: load.region.displayName,
-                                fraction: maxV > 0 ? load.sets / maxV : 0,
-                                valueText: formattedSets(load.sets),
-                                tint: AppTab.train.tint
-                            )
-                            .padding(.vertical, 3)
-                        }
-                    } header: {
-                        Label("This week", systemImage: "chart.bar.fill")
-                    } footer: {
-                        Text("Weighted working sets by muscle group. Secondary muscles count half.")
-                    }
-                }
-
-                ForEach(groupedEntries, id: \.key) { group in
-                    Section {
-                        ForEach(group.value) { entry in
-                            ExerciseEntryRow(
-                                entry: entry,
-                                photoData: defs.first(where: { $0.name == entry.exerciseName })?.photoData
-                            )
-                                .onTapGesture { editingEntry = entry }
-                                .swipeActions(edge: .trailing) {
-                                    Button(role: .destructive) {
-                                        withAnimation {
-                                            context.delete(entry)
-                                            try? context.save()
-                                        }
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                                .swipeActions(edge: .leading) {
-                                    Button {
-                                        editingEntry = entry
-                                    } label: {
-                                        Label("Edit", systemImage: "pencil")
-                                    }
-                                    .tint(.blue)
-                                }
-                        }
-                    } header: {
-                        sessionHeader(for: group.key, entries: group.value)
-                    }
-                }
             }
         }
         .listStyle(.insetGrouped)
@@ -84,7 +85,7 @@ struct TrainingView: View {
                 .accessibilityLabel("Manage exercises")
             }
         }
-        .safeAreaInset(edge: .bottom) {
+        .safeAreaBar(edge: .bottom) {
             GlassEffectContainer(spacing: 12) {
                 Button { showLogSheet = true } label: {
                     Label("Log Exercise", systemImage: "plus")
@@ -171,9 +172,10 @@ struct TrainingView: View {
         return HStack(alignment: .firstTextBaseline) {
             Text(sectionTitle(for: date))
             Spacer()
-            Text("\(entries.count) exercises · \(setCount) sets")
+            Text("\(entries.count) \(entries.count == 1 ? "exercise" : "exercises") · \(setCount) \(setCount == 1 ? "set" : "sets")")
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
                 .textCase(nil)
         }
     }

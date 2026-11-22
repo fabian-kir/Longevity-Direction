@@ -333,9 +333,10 @@ struct N4x4View: View {
     }
 
     private func guidanceLabel(_ title: String, symbol: String, tint: Color) -> some View {
+        // One palette style only: an inner `.foregroundStyle(.white)` would win
+        // and draw the symbol as a plain white dot.
         Label(title, systemImage: symbol)
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(.white)
             .symbolVariant(.circle.fill)
             .symbolRenderingMode(.palette)
             .foregroundStyle(.white, tint)

@@ -18,20 +18,17 @@ struct NutritionEntryDetailView: View {
                         .resizable()
                         .scaledToFit()
                         .frame(maxWidth: .infinity)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
             }
 
             Section("Source") {
-                HStack {
-                    Image(systemName: entry.source.systemImage)
-                    Text(entry.source.displayLabel)
-                    Spacer()
+                LabeledContent {
                     Text(entry.date.formatted(date: .abbreviated, time: .shortened))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                } label: {
+                    Label(entry.source.displayLabel, systemImage: entry.source.systemImage)
                 }
                 if !entry.rawInput.isEmpty {
                     Text(entry.rawInput).font(.subheadline)
@@ -102,7 +99,9 @@ struct NutritionEntryDetailView: View {
             } else {
                 ForEach(fp.items.sorted { $0.plateFraction > $1.plateFraction }, id: \.category) { item in
                     HStack {
-                        Image(systemName: item.category.systemImage).frame(width: 22)
+                        Image(systemName: item.category.systemImage)
+                            .frame(width: 22)
+                            .foregroundStyle(item.category.isAvoid ? .orange : .secondary)
                         Text(item.category.displayLabel)
                         Spacer()
                         Text("\(Int(round(item.plateFraction * 100)))%")
@@ -146,9 +145,7 @@ struct NutritionEntryDetailView: View {
                         HStack {
                             Text(mark.allergen.label).font(.subheadline)
                             Spacer()
-                            Text(mark.source == .user ? "You" : "AI")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
+                            SourceBadge(text: mark.source == .user ? "You" : "AI")
                         }
                     }
                 }
@@ -204,10 +201,22 @@ struct NutritionEntryDetailView: View {
     }
 
     private func row(_ label: String, _ value: String?) -> some View {
-        HStack {
-            Text(label)
-            Spacer()
-            Text(value ?? "—").foregroundStyle(.secondary).monospacedDigit()
+        LabeledContent(label) {
+            Text(value ?? "—").monospacedDigit()
         }
+    }
+}
+
+/// Small capsule that says who set a value ("AI" or "You").
+struct SourceBadge: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color(.tertiarySystemFill), in: Capsule())
     }
 }

@@ -298,9 +298,10 @@ private struct WinsStrip: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, 4)
             }
-            .padding(.horizontal, -4)
+            // Cards run to the screen edge while scrolling instead of being
+            // cut off at the content margin.
+            .scrollClipDisabled()
         }
     }
 }
@@ -578,7 +579,7 @@ private struct FocusHeroCard: View {
     }
 
     private var tint: Color {
-        statusTint(item.status)
+        item.status.focusTint
     }
 }
 
@@ -620,7 +621,7 @@ private struct CompactPriorityRow: View {
     }
 
     private var tint: Color {
-        statusTint(item.status)
+        item.status.focusTint
     }
 }
 
@@ -639,10 +640,14 @@ private struct SectionLabel: View {
 
 // MARK: - Shared status color
 
-private func statusTint(_ status: DomainStatus) -> Color {
-    switch status {
-    case .urgent, .bad:                       .red
-    case .good:                               .green
-    case .borderline, .missing, .unknown:     AppTab.focus.tint
+extension DomainStatus {
+    /// Status colour on the Focus tab. The priority detail uses the same
+    /// mapping, so a row and the card it opens always match.
+    var focusTint: Color {
+        switch self {
+        case .urgent, .bad:                       .red
+        case .good:                               .green
+        case .borderline, .missing, .unknown:     AppTab.focus.tint
+        }
     }
 }

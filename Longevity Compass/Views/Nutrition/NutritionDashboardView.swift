@@ -26,19 +26,16 @@ struct NutritionDashboardView: View {
     }
 
     private var dashboardHeader: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Your food pattern")
-                    .font(.title3.weight(.bold))
-                Text("Last \(digest.lookbackDays) days · \(digest.coverageDays) days logged")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Image(systemName: "leaf.fill")
-                .foregroundStyle(AppTab.nutrition.tint)
-                .accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Your food pattern")
+                .font(.title3.weight(.bold))
+            Text("Last \(digest.lookbackDays) days · \(digest.coverageDays) days logged")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
+        .padding(.horizontal, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 
     private var weeklyDetailsCard: some View {
@@ -57,13 +54,20 @@ struct NutritionDashboardView: View {
             .padding(.top, 12)
         } label: {
             HStack {
-                Label("Weekly signals", systemImage: "chart.bar.fill")
-                    .font(.headline)
+                // The disclosure label is a button; keep the title out of the tint.
+                Label {
+                    Text("Weekly signals")
+                        .foregroundStyle(Color.primary)
+                } icon: {
+                    Image(systemName: "chart.bar.fill")
+                        .foregroundStyle(AppTab.nutrition.tint)
+                }
+                .font(.headline)
                 Spacer()
                 let onTarget = digest.rollups.filter { $0.status == .ok }.count
                 Text("\(onTarget)/\(digest.rollups.count) on track")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.secondary)
             }
         }
         .padding()
@@ -86,8 +90,13 @@ struct NutritionDashboardView: View {
 private struct NutritionStartCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label("Build a picture of how you eat", systemImage: "camera.viewfinder")
-                .font(.headline)
+            Label {
+                Text("Build a picture of how you eat")
+            } icon: {
+                Image(systemName: "camera.viewfinder")
+                    .foregroundStyle(AppTab.nutrition.tint)
+            }
+            .font(.headline)
 
             Text("Log ordinary meals — not just the “good” ones. After a few days, the app can spot variety, protective food groups and patterns worth rebalancing.")
                 .font(.subheadline)
@@ -143,10 +152,13 @@ private struct NutritionGuidanceCard: View {
                         .foregroundStyle(tint)
                     Text(guidance.title)
                         .font(.headline)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(guidance.rationale)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                Spacer(minLength: 0)
             }
 
             VStack(alignment: .leading, spacing: 7) {
@@ -157,12 +169,14 @@ private struct NutritionGuidanceCard: View {
                             .foregroundStyle(tint)
                         Text(idea)
                             .font(.subheadline)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
         }
         .padding()
-        .glassCard(tint: tint, cornerRadius: 20, tintOpacity: 0.17)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(tint: tint, cornerRadius: 18, tintOpacity: 0.17)
     }
 }
 
@@ -176,8 +190,13 @@ private struct FoodPatternCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Label("Diet breadth", systemImage: "circle.hexagongrid.fill")
-                    .font(.headline)
+                Label {
+                    Text("Diet breadth")
+                } icon: {
+                    Image(systemName: "circle.hexagongrid.fill")
+                        .foregroundStyle(AppTab.nutrition.tint)
+                }
+                .font(.headline)
                 Spacer()
                 Text("Patterns, not grams")
                     .font(.caption)
@@ -235,7 +254,7 @@ private struct FoodPatternCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
-        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 

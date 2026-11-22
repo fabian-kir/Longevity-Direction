@@ -28,11 +28,10 @@ struct DigestionInsightsView: View {
         List {
             Section("Status") {
                 if let period = activePeriod {
-                    Text("Tracking since \(period.start.formatted(date: .abbreviated, time: .omitted))")
-                    Text("\(loggedDays(in: period)) \(loggedDays(in: period) == 1 ? "day" : "days") with symptoms logged")
-                        .foregroundStyle(.secondary)
+                    LabeledContent("Tracking since", value: period.start.formatted(date: .abbreviated, time: .omitted))
+                    LabeledContent("Days with symptoms logged", value: "\(loggedDays(in: period))")
                 } else {
-                    Text("Tracking is off. Turn it on in Settings › Data.")
+                    Text("Tracking is off. Turn it on in Settings, from the Focus tab.")
                         .foregroundStyle(.secondary)
                 }
                 NavigationLink("How this works") { DigestionHowItWorksView() }
@@ -40,15 +39,16 @@ struct DigestionInsightsView: View {
 
             resultSections
 
-            Section("Symptom log") {
-                if symptoms.isEmpty {
+            if symptoms.isEmpty {
+                Section {
                     Text("No symptoms logged yet.")
                         .foregroundStyle(.secondary)
+                } header: {
+                    symptomLogTitle
                 }
-                ForEach(symptomsByDay, id: \.day) { group in
-                    Text(group.day.formatted(date: .complete, time: .omitted))
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
+            }
+            ForEach(Array(symptomsByDay.enumerated()), id: \.element.day) { index, group in
+                Section {
                     ForEach(group.entries) { entry in
                         Button { editing = entry } label: { row(entry) }
                             .buttonStyle(.plain)
@@ -59,6 +59,11 @@ struct DigestionInsightsView: View {
                                     Label("Delete", systemImage: "trash")
                                 }
                             }
+                    }
+                } header: {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if index == 0 { symptomLogTitle }
+                        Text(dayTitle(group.day))
                     }
                 }
             }
@@ -199,6 +204,23 @@ struct DigestionInsightsView: View {
 
     // MARK: - Symptom log
 
+    /// Group title above the first day, so the log reads apart from the results.
+    private var symptomLogTitle: some View {
+        Text("Symptom log")
+            .font(.title3.weight(.semibold))
+            // `Color.primary`, not `.primary`: headers resolve `.primary` to their own grey.
+            .foregroundStyle(Color.primary)
+            .textCase(nil)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private func dayTitle(_ day: Date) -> String {
+        let cal = Calendar.current
+        if cal.isDateInToday(day) { return "Today" }
+        if cal.isDateInYesterday(day) { return "Yesterday" }
+        return day.formatted(.dateTime.weekday(.wide).day().month(.wide))
+    }
+
     private func row(_ entry: SymptomEntry) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
@@ -209,6 +231,7 @@ struct DigestionInsightsView: View {
             }
             Spacer()
             Text(entry.onset.formatted(date: .omitted, time: .shortened))
+                .monospacedDigit()
                 .foregroundStyle(.secondary)
         }
         .contentShape(Rectangle())

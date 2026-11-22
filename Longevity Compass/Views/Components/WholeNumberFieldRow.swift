@@ -22,8 +22,11 @@ struct WholeNumberFieldRow: View {
                 .onChange(of: text) { _, newText in
                     value = Double(newText.filter(\.isNumber)) ?? 0
                 }
-            Text(unit)
-                .foregroundStyle(.secondary)
+            // Hidden while empty, so a placeholder such as "Off" doesn't read "Off kcal".
+            if !text.isEmpty {
+                Text(unit)
+                    .foregroundStyle(.secondary)
+            }
         }
         .onAppear {
             text = value > 0 ? String(Int(value.rounded())) : ""
