@@ -88,6 +88,8 @@ final class HealthKitManager {
         set.insert(HKObjectType.workoutType())
         if let dob = HKObjectType.characteristicType(forIdentifier: .dateOfBirth) { set.insert(dob) }
         if let sex = HKObjectType.characteristicType(forIdentifier: .biologicalSex) { set.insert(sex) }
+        // Apple's measured workout distance and effort, shown in workout details.
+        set.formUnion(N4x4HealthLinker.readTypes)
         return set
     }
 
@@ -99,6 +101,10 @@ final class HealthKitManager {
         // Sharing the workout type is required to open an iOS `HKWorkoutSession`,
         // the phone's standalone HR path (AirPods / Bluetooth sensor, spec §5.2).
         set.insert(HKObjectType.workoutType())
+        // Outdoor sessions on iPhone record a route; effort ratings are saved
+        // as Apple's workout effort score.
+        set.insert(HKSeriesType.workoutRoute())
+        set.formUnion(N4x4HealthLinker.shareTypes)
         return set
     }
 

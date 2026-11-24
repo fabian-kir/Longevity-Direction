@@ -57,15 +57,27 @@ final class TimelineTests: XCTestCase {
     }
 
     func testLabels() {
-        XCTAssertEqual(PhaseKind.highIntensity(round: 3).label, "3/4 (high intensity)")
-        XCTAssertEqual(PhaseKind.activeRecovery(round: 2).label, "2/4 (recovery)")
-        XCTAssertEqual(PhaseKind.warmUp.label, "Warm-up")
+        let labels = ProtocolConfig.norwegian4x4.phases.map(\.label)
+        XCTAssertEqual(labels.first, "Warm-up")
+        XCTAssertTrue(labels.contains("3/4 (high intensity)"))
+        XCTAssertTrue(labels.contains("2/4 (recovery)"))
+        XCTAssertEqual(labels.last, "Cool-down")
     }
 
     func testTargetFractions() {
-        XCTAssertEqual(PhaseKind.highIntensity(round: 1).targetFraction, 0.85...0.95)
-        XCTAssertEqual(PhaseKind.activeRecovery(round: 1).targetFraction, 0.65...0.70)
-        XCTAssertNil(PhaseKind.warmUp.targetFraction)
-        XCTAssertNil(PhaseKind.cooldown.targetFraction)
+        let phases = ProtocolConfig.norwegian4x4.phases
+        XCTAssertEqual(phases[1].target, .fractionOfMax(lower: 0.85, upper: 0.95))
+        XCTAssertEqual(phases[2].target, .fractionOfMax(lower: 0.65, upper: 0.70))
+        XCTAssertNil(phases.first?.target)
+        XCTAssertNil(phases.last?.target)
+    }
+
+    func testNextRingColorFollowsConfig() {
+        let config = ProtocolConfig.norwegian4x4
+        XCTAssertEqual(config.nextRingColor(after: 0), .red)
+        XCTAssertEqual(config.nextRingColor(after: 1), .green)
+        // Last round goes straight to the cooldown.
+        XCTAssertEqual(config.nextRingColor(after: config.phases.count - 2), .blue)
+        XCTAssertNil(config.nextRingColor(after: config.phases.count - 1))
     }
 }

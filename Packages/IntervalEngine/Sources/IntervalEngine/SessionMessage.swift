@@ -33,6 +33,9 @@ public struct SessionSnapshot: Equatable, Sendable, Codable {
     public let acknowledgedCommandIDs: [UUID]
     public let output: EngineOutput
     public let checkpoint: EngineCheckpoint
+    /// What the session is performed on, so the receiving device records the
+    /// matching Apple workout type. Optional for older peers.
+    public let equipment: WorkoutEquipment?
 
     public init(
         sessionID: UUID,
@@ -43,7 +46,8 @@ public struct SessionSnapshot: Equatable, Sendable, Codable {
         heartRateSessionActive: Bool = false,
         acknowledgedCommandIDs: [UUID] = [],
         output: EngineOutput,
-        checkpoint: EngineCheckpoint
+        checkpoint: EngineCheckpoint,
+        equipment: WorkoutEquipment? = nil
     ) {
         self.sessionID = sessionID
         self.createdAt = createdAt
@@ -54,6 +58,7 @@ public struct SessionSnapshot: Equatable, Sendable, Codable {
         self.acknowledgedCommandIDs = acknowledgedCommandIDs
         self.output = output
         self.checkpoint = checkpoint
+        self.equipment = equipment
     }
 }
 
@@ -64,6 +69,8 @@ public struct SessionCommand: Equatable, Sendable, Codable {
         case setPaused(Bool)
         case skip
         case stop
+        /// Complete and save an open-ended session now (Hold HR's End).
+        case finish
         case requestSync
     }
 

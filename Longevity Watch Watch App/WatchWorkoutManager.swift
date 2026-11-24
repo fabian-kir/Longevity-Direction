@@ -15,6 +15,8 @@ final class WatchWorkoutManager: NSObject {
     private var session: HKWorkoutSession?
     private var builder: HKLiveWorkoutBuilder?
     private var onHR: ((Double, Date) -> Void)?
+    private var segments = PhaseSegmentTracker()
+    private lazy var route = WorkoutRouteRecorder(healthStore: healthStore)
 
     /// App state/control messages arriving from the mirrored phone session.
     var onRemoteMessage: ((SessionMessage) -> Void)?
@@ -41,15 +43,16 @@ final class WatchWorkoutManager: NSObject {
         HKObjectType.quantityType(forIdentifier: .heartRate)
     }
 
-    /// Request read access to HR (and DOB) plus workout share. Returns `false`
-    /// when HealthKit is unavailable or the user declines.
+    /// Request read access to HR, DOB and the live workout metrics plus workout
+    /// and route share. Returns `false` when HealthKit is unavailable or the
+    /// user declines.
     func requestAuthorization() async -> Bool {
-        guard HKHealthStore.isHealthDataAvailable(), let hr = Self.heartRateType else { return false }
-        var read: Set<HKObjectType> = [hr]
-        if let dob = HKObjectType.characteristicType(forIdentifier: .dateOfBirth) { read.insert(dob) }
-        let share: Set<HKSampleType> = [HKQuantityType.workoutType()]
+        guard HKHealthStore.isHealthDataAvailable() else { return false }
         do {
-            try await healthStore.requestAuthorization(toShare: share, read: read)
+            try await healthStore.requestAuthorization(
+                toShare: WorkoutHealthMetadata.liveShareTypes,
+                read: WorkoutHealthMetadata.liveReadTypes
+            )
             return true
         } catch {
             return false
@@ -77,10 +80,15 @@ final class WatchWorkoutManager: NSObject {
         return result?.maximumQuantity()?.doubleValue(for: Self.bpmUnit)
     }
 
-    /// Start a HIIT workout session and begin streaming HR. Returns `false` if a
-    /// session can't be created (no HealthKit) so the caller can degrade.
+    /// Start a workout session of the type matching `equipment` and begin
+    /// streaming HR. Returns `false` if a session can't be created (no
+    /// HealthKit) so the caller can degrade.
     @discardableResult
-    func start(onHR: @escaping (Double, Date) -> Void) -> Bool {
+    func start(
+        equipment: WorkoutEquipment,
+        mode: WorkoutMode,
+        onHR: @escaping (Double, Date) -> Void
+    ) -> Bool {
         guard HKHealthStore.isHealthDataAvailable() else { return false }
         self.onHR = onHR
 
@@ -88,9 +96,7 @@ final class WatchWorkoutManager: NSObject {
             return true
         }
 
-        let config = HKWorkoutConfiguration()
-        config.activityType = .highIntensityIntervalTraining
-        config.locationType = .unknown
+        let config = equipment.workoutConfiguration(for: mode)
 
         do {
             let session = try HKWorkoutSession(healthStore: healthStore, configuration: config)
@@ -108,6 +114,8 @@ final class WatchWorkoutManager: NSObject {
             let startDate = Date()
             session.startActivity(with: startDate)
             builder.beginCollection(withStart: startDate) { _, _ in }
+            segments.reset()
+            if equipment.recordsRoute { route.start() }
             return true
         } catch {
             self.onHR = nil
@@ -165,7 +173,15 @@ final class WatchWorkoutManager: NSObject {
         session?.resume()
     }
 
+    /// Marks phase boundaries for the saved workout's segments.
+    func observePhase(_ kind: PhaseKind, label: String, at date: Date) {
+        guard session != nil else { return }
+        segments.observe(kind: kind, label: label, at: date)
+    }
+
     func teardown() {
+        route.discard()
+        segments.reset()
         onHR = nil
         isRemoteConnected = false
         session?.delegate = nil
@@ -178,16 +194,22 @@ final class WatchWorkoutManager: NSObject {
         builder = nil
     }
 
-    /// Finalizes a naturally completed N4x4 session as one HealthKit workout.
-    /// Explicitly stopped sessions continue to use `teardown()` and are
-    /// discarded, preserving the distinction between complete and aborted runs.
+    /// Finalizes a completed session as one HealthKit workout with a segment
+    /// per phase. Explicitly stopped sessions continue to use `teardown()` and
+    /// are discarded, preserving the distinction between complete and aborted
+    /// runs.
     @discardableResult
     func completeWorkout(
         at endDate: Date,
         sessionID: UUID,
+        mode: WorkoutMode,
+        equipment: WorkoutEquipment,
         completion: @escaping (Error?) -> Void = { _ in }
     ) -> Bool {
         guard let session, let builder else { return false }
+        let events = WorkoutHealthMetadata.segmentEvents(segments.finish(at: endDate))
+        segments.reset()
+        let pendingRoute = route.stop()
 
         onHR = nil
         isRemoteConnected = false
@@ -199,19 +221,24 @@ final class WatchWorkoutManager: NSObject {
 
         Task { @MainActor in
             do {
+                if !events.isEmpty { try? await builder.addWorkoutEvents(events) }
                 try await builder.endCollection(at: endDate)
-                try await builder.addMetadata([
-                    HKMetadataKeyWorkoutBrandName: "Longevity Direction N4x4",
-                    HKMetadataKeySyncIdentifier: sessionID.uuidString,
-                    HKMetadataKeySyncVersion: 1,
-                ])
-                let error = await withCheckedContinuation { continuation in
-                    builder.finishWorkout { _, error in
-                        continuation.resume(returning: error)
+                try await builder.addMetadata(
+                    WorkoutHealthMetadata.workout(mode: mode, sessionID: sessionID, equipment: equipment)
+                )
+                let (workout, error) = await withCheckedContinuation { continuation in
+                    builder.finishWorkout { workout, error in
+                        continuation.resume(returning: (workout, error))
                     }
+                }
+                if let workout {
+                    _ = try? await pendingRoute?.finishRoute(with: workout, metadata: nil)
+                } else {
+                    pendingRoute?.discard()
                 }
                 completion(error)
             } catch {
+                pendingRoute?.discard()
                 builder.discardWorkout()
                 completion(error)
             }
@@ -267,6 +294,8 @@ final class WatchWorkoutManager: NSObject {
         sourceSession.delegate = nil
         builder?.delegate = nil
         builder?.discardWorkout()
+        route.discard()
+        segments.reset()
         session = nil
         builder = nil
         onSessionFailure?(error)
@@ -282,6 +311,8 @@ final class WatchWorkoutManager: NSObject {
         sourceSession.delegate = nil
         builder?.delegate = nil
         builder?.discardWorkout()
+        route.discard()
+        segments.reset()
         session = nil
         builder = nil
         onSessionEnded?()

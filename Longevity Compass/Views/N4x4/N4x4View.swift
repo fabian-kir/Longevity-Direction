@@ -3,9 +3,10 @@ import IntervalUI
 import SwiftData
 import SwiftUI
 
-/// Phone screen for a live Norwegian 4x4 session (spec §6.1): a center timer
-/// inside a current-phase progress ring, phase label, HR + guidance cue, and
-/// the Skip / Pause / End controls.
+/// Phone screen for a live guided session (spec §6.1): a center timer inside a
+/// current-phase progress ring, phase label, HR + guidance cue, and the
+/// Skip / Pause / End controls. The idle screen opens on the Norwegian 4×4 as
+/// before; Hold HR is one switch away and the heart check is a monthly card.
 struct N4x4View: View {
     @Environment(AppServices.self) private var services
     @Query(sort: \N4x4WorkoutLog.startedAt, order: .reverse) private var workoutLogs: [N4x4WorkoutLog]
@@ -13,12 +14,16 @@ struct N4x4View: View {
 
     private enum PresentedSheet: Identifiable {
         case setup
-        case machineResults(N4x4WorkoutLog)
+        case heartCheck
+        case settings
+        case details(N4x4WorkoutLog)
 
         var id: String {
             switch self {
             case .setup: return "setup"
-            case .machineResults(let log): return "machine-\(log.sessionID.uuidString)"
+            case .heartCheck: return "heart-check"
+            case .settings: return "settings"
+            case .details(let log): return "details-\(log.sessionID.uuidString)"
             }
         }
     }
@@ -46,7 +51,17 @@ struct N4x4View: View {
                 } label: {
                     Image(systemName: "clock.arrow.circlepath")
                 }
-                .accessibilityLabel("N4x4 workout history")
+                .accessibilityLabel("Workout history")
+            }
+            if !(model.isRunning || model.isMirroring) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        presentedSheet = .settings
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                    }
+                    .accessibilityLabel("Workout settings")
+                }
             }
         }
         .preferredColorScheme(model.isRunning || model.isMirroring ? .dark : nil)
@@ -61,95 +76,182 @@ struct N4x4View: View {
         .sheet(item: $presentedSheet) { sheet in
             switch sheet {
             case .setup:
-                N4x4SetupSheet(details: $model.workoutDetails) {
-                    Task { await model.start(dateOfBirth: services.healthSnapshot.dateOfBirth) }
+                N4x4SetupSheet(mode: model.selectedMode, details: $model.workoutDetails, settings: $model.settings, hrMax: model.effectiveMaxHeartRate) {
+                    start(model.selectedMode)
                 }
-            case .machineResults(let log):
-                N4x4MachineResultsSheet(log: log)
+            case .heartCheck:
+                HeartCheckStartSheet(settings: $model.settings, details: $model.workoutDetails) {
+                    start(.heartCheck)
+                }
+            case .settings:
+                WorkoutSettingsView()
+            case .details(let log):
+                N4x4WorkoutDetailsSheet(log: log)
             }
         }
+    }
+
+    private func start(_ mode: WorkoutMode) {
+        Task { await model.start(mode: mode, dateOfBirth: services.healthSnapshot.dateOfBirth) }
     }
 
     // MARK: - Idle / start
 
+    /// Swiping left/right pages between the two everyday routines and does
+    /// nothing else; each page scrolls vertically only.
     private var idle: some View {
-        ZStack {
-            N4x4AmbientBackdrop(tint: AppTab.n4x4.tint)
+        @Bindable var model = services.n4x4
+        return ZStack {
+            N4x4AmbientBackdrop(tint: modeTint(model.selectedMode))
+                .animation(.easeInOut(duration: 0.3), value: model.selectedMode)
 
-            ScrollView {
-                VStack(spacing: 0) {
-                    Spacer(minLength: 32)
+            VStack(spacing: 0) {
+                N4x4ModeSwitcher(selection: $model.selectedMode, tint: modeTint(model.selectedMode))
+                    .padding(.horizontal, 24)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
 
-                    MjolnirIcon()
-                        .frame(width: 54, height: 64)
-                        .foregroundStyle(AppTab.n4x4.tint)
-                        .padding(24)
-                        .glassEffect(.regular.tint(AppTab.n4x4.tint.opacity(0.12)), in: Circle())
-
-                    VStack(spacing: 8) {
-                        Text("Norwegian 4×4")
-                            .font(.largeTitle.bold())
-                            .tracking(-0.7)
-                        Text("A focused 31-minute interval session with live heart-rate guidance.")
-                            .font(.subheadline)
-                            .multilineTextAlignment(.center)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: 310)
-                    }
-                    .padding(.top, 24)
-
-                    protocolOverview
-                        .padding(.top, 30)
-
-                    estimatedMaxLabel
-                        .padding(.top, 16)
-
-                    if let latest = workoutLogs.first {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Label("Latest workout", systemImage: "chart.xyaxis.line")
-                                    .font(.headline)
-                                Spacer()
-                                NavigationLink("All") { N4x4WorkoutHistoryView() }
-                                    .font(.subheadline.weight(.semibold))
-                            }
-                            NavigationLink {
-                                N4x4WorkoutDetailView(log: latest)
-                            } label: {
-                                N4x4WorkoutRow(log: latest)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(12)
-                                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.top, 26)
-                    }
-
-                    Button {
-                        presentedSheet = .setup
-                    } label: {
-                        Label("Start workout", systemImage: "play.fill")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 7)
-                    }
-                    .buttonStyle(.glassProminent)
-                    .tint(AppTab.n4x4.tint)
-                    .padding(.top, 28)
+                TabView(selection: $model.selectedMode) {
+                    idlePage(.n4x4)
+                        .tag(WorkoutMode.n4x4)
+                    idlePage(.steadyHeartRate)
+                        .tag(WorkoutMode.steadyHeartRate)
                 }
-                .padding(24)
+                .tabViewStyle(.page(indexDisplayMode: .never))
             }
+        }
+        .sensoryFeedback(.selection, trigger: model.selectedMode)
+    }
+
+    private func idlePage(_ mode: WorkoutMode) -> some View {
+        let tint = modeTint(mode)
+        return ScrollView {
+            VStack(spacing: 0) {
+                modeIcon(mode, tint: tint)
+                    .padding(24)
+                    .glassEffect(.regular.tint(tint.opacity(0.12)), in: Circle())
+                    .padding(.top, 16)
+
+                VStack(spacing: 8) {
+                    Text(mode.title)
+                        .font(.largeTitle.bold())
+                        .tracking(-0.7)
+                        .multilineTextAlignment(.center)
+                    Text(modeSubtitle(mode))
+                        .font(.subheadline)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: 310)
+                }
+                .padding(.top, 24)
+
+                Group {
+                    if mode == .steadyHeartRate {
+                        steadyOverview
+                    } else {
+                        protocolOverview
+                    }
+                }
+                .padding(.top, 30)
+
+                maxHeartRateLabel
+                    .padding(.top, 16)
+
+                HeartCheckCard(logs: workoutLogs) {
+                    presentedSheet = .heartCheck
+                }
+                .padding(.top, 26)
+
+                if let latest = workoutLogs.first {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Label("Latest workout", systemImage: "chart.xyaxis.line")
+                                .font(.headline)
+                            Spacer()
+                            NavigationLink("All") { N4x4WorkoutHistoryView() }
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        NavigationLink {
+                            N4x4WorkoutDetailView(log: latest)
+                        } label: {
+                            N4x4WorkoutRow(log: latest)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.top, 26)
+                }
+
+                Button {
+                    presentedSheet = .setup
+                } label: {
+                    Label("Start workout", systemImage: "play.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                }
+                .buttonStyle(.glassProminent)
+                .tint(tint)
+                .padding(.top, 28)
+            }
+            .padding(24)
+            // Pin the content to the page width: nothing inside can widen the
+            // scroll content and make the page drag sideways.
+            .containerRelativeFrame(.horizontal)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+    }
+
+    @ViewBuilder
+    private func modeIcon(_ mode: WorkoutMode, tint: Color) -> some View {
+        if mode == .steadyHeartRate {
+            Image(systemName: "heart.circle")
+                .font(.system(size: 54, weight: .medium))
+                .frame(width: 54, height: 64)
+                .foregroundStyle(tint)
+        } else {
+            MjolnirIcon()
+                .frame(width: 54, height: 64)
+                .foregroundStyle(tint)
+        }
+    }
+
+    private func modeTint(_ mode: WorkoutMode) -> Color {
+        mode == .steadyHeartRate ? N4x4Palette.recovery : AppTab.n4x4.tint
+    }
+
+    private func modeSubtitle(_ mode: WorkoutMode) -> String {
+        switch mode {
+        case .n4x4:
+            return "A focused \(model.settings.n4x4.totalMinutes)-minute interval session with live heart-rate guidance."
+        case .steadyHeartRate:
+            return "Hold one heart rate for a set time. Your Watch taps you when you drift too high or too low."
+        case .heartCheck:
+            return "A monthly check of your heart's fitness and recovery."
         }
     }
 
     private var protocolOverview: some View {
-        HStack(spacing: 0) {
-            protocolStep("3 MIN", "WARM UP", color: N4x4Palette.warmUp)
+        let n4x4 = model.settings.n4x4
+        let hrMax = model.effectiveMaxHeartRate
+        return HStack(spacing: 0) {
+            protocolStep("\(n4x4.warmUpMinutes) MIN", "WARM UP", detail: nil, color: N4x4Palette.warmUp)
             protocolDivider
-            protocolStep("4×4", "HARD", color: N4x4Palette.effort)
+            protocolStep(
+                "\(n4x4.rounds)×\(n4x4.intervalMinutes)",
+                "HARD",
+                detail: bpmRange(n4x4.highFraction, hrMax: hrMax),
+                color: N4x4Palette.effort
+            )
             protocolDivider
-            protocolStep("3 MIN", "RECOVER", color: N4x4Palette.recovery)
+            protocolStep(
+                "\(n4x4.recoveryMinutes) MIN",
+                "RECOVER",
+                detail: bpmRange(n4x4.recoveryFraction, hrMax: hrMax),
+                color: N4x4Palette.recovery
+            )
         }
         .padding(.vertical, 15)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -159,7 +261,30 @@ struct N4x4View: View {
         }
     }
 
-    private func protocolStep(_ value: String, _ label: String, color: Color) -> some View {
+    private var steadyOverview: some View {
+        let steady = model.settings.steady
+        let target = steady.resolvedTarget(hrMax: model.effectiveMaxHeartRate)
+        return HStack(spacing: 0) {
+            protocolStep("\(steady.warmUpMinutes) MIN", "WARM UP", detail: nil, color: N4x4Palette.warmUp)
+            protocolDivider
+            protocolStep("\(target)", "BPM", detail: "±\(steady.toleranceBPM)", color: N4x4Palette.recovery)
+            protocolDivider
+            protocolStep("\(steady.durationMinutes) MIN", "HOLD", detail: nil, color: N4x4Palette.recovery)
+        }
+        .padding(.vertical, 15)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(.white.opacity(0.34), lineWidth: 0.75)
+        }
+    }
+
+    private func bpmRange(_ fraction: ClosedRange<Double>, hrMax: Double?) -> String? {
+        guard let hrMax else { return nil }
+        return "\(Int((fraction.lowerBound * hrMax).rounded()))–\(Int((fraction.upperBound * hrMax).rounded())) bpm"
+    }
+
+    private func protocolStep(_ value: String, _ label: String, detail: String?, color: Color) -> some View {
         VStack(spacing: 4) {
             Text(value)
                 .font(.title3.bold().monospacedDigit())
@@ -168,6 +293,11 @@ struct N4x4View: View {
                 .font(.caption2.weight(.semibold))
                 .tracking(0.7)
                 .foregroundStyle(.secondary)
+            if let detail {
+                Text(detail)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
         }
         .frame(maxWidth: .infinity)
     }
@@ -178,12 +308,20 @@ struct N4x4View: View {
     }
 
     @ViewBuilder
-    private var estimatedMaxLabel: some View {
-        if let hrMax = model.hrMax {
-            Label("Estimated HRmax \(Int(hrMax.rounded())) bpm", systemImage: "heart.fill")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+    private var maxHeartRateLabel: some View {
+        Button {
+            presentedSheet = .settings
+        } label: {
+            if let hrMax = model.effectiveMaxHeartRate {
+                let source = model.settings.customMaxHeartRate == nil ? "estimated" : "your setting"
+                Label("Max HR \(Int(hrMax.rounded())) bpm · \(source)", systemImage: "heart.fill")
+            } else {
+                Label("Set your max heart rate", systemImage: "heart")
+            }
         }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+        .buttonStyle(.plain)
     }
 
     // MARK: - Active
@@ -193,7 +331,7 @@ struct N4x4View: View {
         return PhaseFlowView(
             progress: output?.phaseProgress ?? 0,
             color: output?.ringColor.swiftUIColor ?? N4x4Palette.warmUp,
-            nextColor: output?.phase.nextRingColor?.swiftUIColor,
+            nextColor: output?.nextRingColor?.swiftUIColor,
             backgroundColor: Color(uiColor: .systemBackground),
             minimumCoreRadius: 64,
             shadowRadius: 30
@@ -239,7 +377,7 @@ struct N4x4View: View {
             guidanceRow(output)
 
             Divider()
-                .overlay(.white.opacity(0.18))
+                .overlay(.white.opacity(0.25))
 
             HStack(spacing: 12) {
                 targetHint(output)
@@ -251,11 +389,13 @@ struct N4x4View: View {
                 HStack(spacing: 12) {
                     Label("BPM", systemImage: "waveform.path.ecg")
                         .foregroundStyle(.pink)
-                    Label("Target slope", systemImage: "line.diagonal")
-                        .foregroundStyle(.yellow)
+                    if model.program?.mode != .heartCheck {
+                        Label("Target", systemImage: "line.diagonal")
+                            .foregroundStyle(.yellow)
+                    }
                     Spacer()
                     Text("LAST 7 MIN")
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(.white.opacity(0.6))
                 }
                 .font(.caption2.weight(.bold))
 
@@ -265,7 +405,7 @@ struct N4x4View: View {
                         if !model.liveFrames.contains(where: { $0.bpm != nil }) {
                             Text("Waiting for heart-rate data")
                                 .font(.caption)
-                                .foregroundStyle(.white.opacity(0.62))
+                                .foregroundStyle(.white.opacity(0.7))
                         }
                     }
             }
@@ -273,17 +413,16 @@ struct N4x4View: View {
             if model.isMirroring {
                 Label("Heart rate from Apple Watch", systemImage: "applewatch.radiowaves.left.and.right")
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.82))
+                    .foregroundStyle(.white.opacity(0.85))
             }
         }
         .padding(18)
         .frame(maxWidth: .infinity)
         .foregroundStyle(.white)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .strokeBorder(.white.opacity(0.20), lineWidth: 0.75)
-        }
+        .shadow(color: .black.opacity(0.22), radius: 6, y: 2)
+        // Clear Liquid Glass: the phase colour flows through and refracts at
+        // the edges instead of sitting behind a dark frosted slab.
+        .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 
     private func phaseSymbol(_ output: EngineOutput?) -> String {
@@ -293,6 +432,9 @@ struct N4x4View: View {
         case .highIntensity: return "bolt.fill"
         case .activeRecovery: return "wind"
         case .cooldown: return "snowflake"
+        case .steady: return "heart.fill"
+        case .fixedWorkload: return "speedometer"
+        case .stillness: return "figure.stand"
         }
     }
 
@@ -308,7 +450,7 @@ struct N4x4View: View {
                     .monospacedDigit()
                 Text("BPM")
                     .font(.caption2.weight(.bold))
-                    .foregroundStyle(.white.opacity(0.65))
+                    .foregroundStyle(.white.opacity(0.7))
             }
 
             Spacer(minLength: 4)
@@ -344,29 +486,39 @@ struct N4x4View: View {
 
     @ViewBuilder
     private func targetlessCue(_ output: EngineOutput?) -> some View {
-        if output?.trailingHR == nil {
-            Label("Timer only", systemImage: "timer")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.82))
-        } else {
-            Label("Warming up", systemImage: "waveform.path.ecg")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.82))
+        Group {
+            if output?.trailingHR == nil {
+                Label("Timer only", systemImage: "timer")
+            } else {
+                switch output?.phase {
+                case .fixedWorkload?: Label("Keep it steady", systemImage: "speedometer")
+                case .stillness?: Label("Measuring", systemImage: "waveform.path.ecg")
+                case .cooldown?: Label("Cooling down", systemImage: "waveform.path.ecg")
+                default: Label("Warming up", systemImage: "waveform.path.ecg")
+                }
+            }
         }
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(.white.opacity(0.85))
     }
 
     @ViewBuilder
     private func targetHint(_ output: EngineOutput?) -> some View {
         if let t = output?.target {
             let lo = Int(t.lowerBound.rounded()), hi = Int(t.upperBound.rounded())
-            Label(lo == hi ? "Target \(lo)" : "Target \(lo)–\(hi)", systemImage: "scope")
+            let text: String = if model.program?.mode == .steadyHeartRate, let band = model.program?.deadBand {
+                "Target \(lo) ±\(Int(band))"
+            } else {
+                lo == hi ? "Target \(lo)" : "Target \(lo)–\(hi)"
+            }
+            Label(text, systemImage: "scope")
                 .font(.caption.weight(.medium))
-                .foregroundStyle(.white.opacity(0.78))
+                .foregroundStyle(.white.opacity(0.85))
                 .monospacedDigit()
         } else {
             Label("No HR target", systemImage: "scope")
                 .font(.caption.weight(.medium))
-                .foregroundStyle(.white.opacity(0.58))
+                .foregroundStyle(.white.opacity(0.65))
         }
     }
 
@@ -375,7 +527,7 @@ struct N4x4View: View {
         if let output {
             Label(Self.clock(output.totalRemaining), systemImage: "hourglass")
                 .font(.caption.weight(.medium))
-                .foregroundStyle(.white.opacity(0.78))
+                .foregroundStyle(.white.opacity(0.85))
                 .monospacedDigit()
         }
     }
@@ -396,13 +548,21 @@ struct N4x4View: View {
                     controlLabel(paused ? "Resume" : "Pause", paused ? "play.fill" : "pause.fill")
                 }
                 .buttonStyle(.glassProminent)
-            .tint(output?.isPaused == true ? N4x4Palette.recovery : AppTab.n4x4.tint)
+                .tint(output?.isPaused == true ? N4x4Palette.recovery : AppTab.n4x4.tint)
 
-                Button(role: .destructive) { model.end() } label: {
-                    controlLabel("End", "stop.fill")
+                if model.endCompletesSession {
+                    Button { model.end() } label: {
+                        controlLabel("Finish", "checkmark")
+                    }
+                    .buttonStyle(.glass)
+                    .tint(N4x4Palette.recovery)
+                } else {
+                    Button(role: .destructive) { model.end() } label: {
+                        controlLabel("End", "stop.fill")
+                    }
+                    .buttonStyle(.glass)
+                    .tint(.red)
                 }
-                .buttonStyle(.glass)
-                .tint(.red)
             }
         }
     }
@@ -420,70 +580,119 @@ struct N4x4View: View {
     // MARK: - Completion
 
     private func completion(_ output: EngineOutput) -> some View {
-        ZStack {
+        let mode = model.program?.mode ?? .n4x4
+        return ZStack {
             N4x4AmbientBackdrop(tint: N4x4Palette.recovery)
 
-            VStack(spacing: 18) {
-                Spacer()
+            GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 18) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 42, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 88, height: 88)
+                        .glassEffect(.regular.tint(N4x4Palette.recovery.opacity(0.38)), in: Circle())
 
-                Image(systemName: "checkmark")
-                    .font(.system(size: 42, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 88, height: 88)
-                    .glassEffect(.regular.tint(N4x4Palette.recovery.opacity(0.38)), in: Circle())
+                    Text(mode == .heartCheck ? "Heart check done" : "Session complete")
+                        .font(.largeTitle.bold())
+                        .tracking(-0.7)
+                    Text("\(Self.clock(output.elapsed)) total")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
 
-                Text("Session complete")
-                    .font(.largeTitle.bold())
-                    .tracking(-0.7)
-                Text("\(Self.clock(output.elapsed)) total")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
+                    if let log = completedLog {
+                        completionMetrics(log)
+                            .padding(.top, 8)
 
-                if let log = completedLog {
-                    HStack(spacing: 18) {
-                        completionMetric("AVG", log.averageHeartRate.map { "\(Int($0.rounded()))" } ?? "—", "BPM")
-                        completionMetric("IN TARGET", log.targetAdherence.map { $0.formatted(.percent.precision(.fractionLength(0))) } ?? "—", "")
-                        completionMetric("RECOVERY", log.averageOneMinuteRecovery.map { "\(Int($0.rounded()))" } ?? "—", "BPM / 1M")
+                        if log.mode == .heartCheck {
+                            HeartCheckComparison(log: log, logs: workoutLogs)
+                        }
+
+                        EffortPicker(score: log.effortScore) { score in
+                            Task { await model.healthLinker.setEffort(score, for: log) }
+                        }
+                        .padding(14)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+                        Button {
+                            presentedSheet = .details(log)
+                        } label: {
+                            Label(detailsButtonTitle(log.equipment), systemImage: "square.and.pencil")
+                        }
+                        .buttonStyle(.glass)
+
+                        NavigationLink {
+                            N4x4WorkoutDetailView(log: log)
+                        } label: {
+                            Label("View workout analysis", systemImage: "chart.xyaxis.line")
+                        }
+                        .font(.headline)
                     }
-                    .padding(.top, 8)
 
                     Button {
-                        presentedSheet = .machineResults(log)
+                        start(mode)
                     } label: {
-                        Label("Add machine results", systemImage: "square.and.pencil")
+                        Label("Start again", systemImage: "arrow.clockwise")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 7)
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.glassProminent)
+                    .tint(N4x4Palette.recovery)
+                    .padding(.top, 12)
 
-                    NavigationLink {
-                        N4x4WorkoutDetailView(log: log)
-                    } label: {
-                        Label("View workout analysis", systemImage: "chart.xyaxis.line")
-                    }
-                    .font(.headline)
-                }
-
-                Spacer()
-
-                Button {
-                    Task { await model.start(dateOfBirth: services.healthSnapshot.dateOfBirth) }
-                } label: {
-                    Label("Start again", systemImage: "arrow.clockwise")
+                    Button("Done") { model.dismissCompletion() }
                         .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
                 }
-                .buttonStyle(.glassProminent)
-                .tint(N4x4Palette.recovery)
+                .padding(24)
+                .containerRelativeFrame(.horizontal)
+                // Centered when it fits; scrolls vertically when it doesn't.
+                .frame(minHeight: geometry.size.height)
             }
-            .padding(24)
+            .scrollBounceBehavior(.basedOnSize)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func completionMetrics(_ log: N4x4WorkoutLog) -> some View {
+        HStack(spacing: 18) {
+            switch log.mode {
+            case .n4x4:
+                completionMetric("AVG", bpm(log.averageHeartRate), "BPM")
+                completionMetric("IN TARGET", percent(log.targetAdherence), "")
+                completionMetric("RECOVERY", bpm(log.averageOneMinuteRecovery), "BPM / 1M")
+            case .steadyHeartRate:
+                completionMetric("AVG", bpm(log.averageHeartRate), "BPM")
+                completionMetric("IN RANGE", percent(log.targetAdherence), "")
+                completionMetric("PEAK", bpm(log.peakHeartRate), "BPM")
+            case .heartCheck:
+                completionMetric("AT WORKLOAD", bpm(log.workloadHeartRate), "BPM")
+                completionMetric("DROP 1 MIN", bpm(log.recoveryDropAfter60), "BPM")
+                completionMetric("DROP 2 MIN", bpm(log.recoveryDropAfter120), "BPM")
+            }
         }
     }
 
     // MARK: - Helpers
 
+    private func detailsButtonTitle(_ equipment: N4x4Equipment) -> String {
+        if equipment.acceptsIncline { return "Correct distance or incline" }
+        if equipment.acceptsDistanceCorrection { return "Correct distance" }
+        return "Add notes"
+    }
+
     private var completedLog: N4x4WorkoutLog? {
         guard let id = model.lastCompletedLogID else { return nil }
         return workoutLogs.first { $0.sessionID == id }
+    }
+
+    private func bpm(_ value: Double?) -> String {
+        value.map { "\(Int($0.rounded()))" } ?? "—"
+    }
+
+    private func percent(_ value: Double?) -> String {
+        value.map { $0.formatted(.percent.precision(.fractionLength(0))) } ?? "—"
     }
 
     private func completionMetric(_ title: String, _ value: String, _ unit: String) -> some View {
@@ -518,7 +727,7 @@ struct N4x4View: View {
     }
 }
 
-private struct N4x4AmbientBackdrop: View {
+struct N4x4AmbientBackdrop: View {
     let tint: Color
 
     var body: some View {
@@ -538,5 +747,48 @@ private struct N4x4AmbientBackdrop: View {
             )
         }
         .ignoresSafeArea()
+    }
+}
+
+/// Two-option switch above the mode pager. Unlike a segmented control it
+/// shrinks its labels instead of forcing the page wider than the screen.
+private struct N4x4ModeSwitcher: View {
+    @Binding var selection: WorkoutMode
+    let tint: Color
+    @Namespace private var highlight
+
+    private let options: [(mode: WorkoutMode, title: String)] = [
+        (.n4x4, "4×4 intervals"),
+        (.steadyHeartRate, "Hold heart rate"),
+    ]
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(options, id: \.mode) { option in
+                let isSelected = selection == option.mode
+                Button {
+                    withAnimation(.snappy) { selection = option.mode }
+                } label: {
+                    Text(option.title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .foregroundStyle(isSelected ? .primary : .secondary)
+                        .frame(maxWidth: .infinity, minHeight: 34)
+                        .background {
+                            if isSelected {
+                                Capsule()
+                                    .fill(tint.opacity(0.18))
+                                    .matchedGeometryEffect(id: "highlight", in: highlight)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .glassEffect(.regular, in: Capsule())
     }
 }

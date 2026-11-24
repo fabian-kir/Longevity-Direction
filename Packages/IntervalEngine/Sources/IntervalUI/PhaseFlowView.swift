@@ -8,6 +8,7 @@ public enum N4x4Palette {
     public static let warmUp = Color(red: 0.20, green: 0.42, blue: 0.62)
     public static let effort = Color(red: 0.76, green: 0.24, blue: 0.22)
     public static let recovery = Color(red: 0.14, green: 0.50, blue: 0.40)
+    public static let workload = Color(red: 0.72, green: 0.48, blue: 0.16)
 }
 
 public extension RingColor {
@@ -16,6 +17,7 @@ public extension RingColor {
         case .blue:  return N4x4Palette.warmUp
         case .red:   return N4x4Palette.effort
         case .green: return N4x4Palette.recovery
+        case .amber: return N4x4Palette.workload
         }
     }
 }

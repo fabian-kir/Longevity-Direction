@@ -51,9 +51,13 @@ public struct EngineOutput: Equatable, Sendable, Codable {
     public let adjustmentHint: AdjustmentHint
     public let isPaused: Bool
     public let isFinished: Bool
+    /// Colour of the following phase, for the anticipatory ring fill. `nil`
+    /// during the last phase. Optional so older snapshots still decode.
+    public let nextRingColor: RingColor?
 }
 
-/// Deterministic Norwegian 4x4 control engine (spec §5.1).
+/// Deterministic interval control engine (spec §5.1). Runs the Norwegian 4x4
+/// by default, or any ``ProtocolConfig`` (Hold HR, heart check).
 ///
 /// Given a start timestamp, the fixed config, and a stream of HR samples, it
 /// computes current phase, target-line value, dead-band state, ring progress and
@@ -63,6 +67,8 @@ public struct EngineOutput: Equatable, Sendable, Codable {
 public final class IntervalEngine {
 
     // MARK: Tunables (spec §4)
+    /// Default dead-band of the standard 4×4 protocol. Each config carries its
+    /// own tolerance (``ProtocolConfig/deadBand``).
     public static let deadBandBPM: Double = 8
     /// Apple Watch heart-rate samples can arrive more than ten seconds apart.
     /// Keep the most recent reading visible long enough to avoid flickering to
@@ -88,6 +94,9 @@ public final class IntervalEngine {
     private var phaseStartHR: Double?
     private var lastGuidance: (state: DeadBandState, at: Date)?
     private var finished = false
+    /// Protocol-elapsed time at completion; earlier than the total when the
+    /// session was finished early.
+    private var finishedElapsed: TimeInterval?
 
     public init(config: ProtocolConfig = .norwegian4x4, hrMax: Double?, startedAt: Date) {
         self.config = config
@@ -95,7 +104,8 @@ public final class IntervalEngine {
         self.startedAt = startedAt
     }
 
-    /// Restores an engine from a transport-safe checkpoint.
+    /// Restores an engine from a transport-safe checkpoint. The checkpoint's
+    /// own config wins; `config` only applies to checkpoints that predate it.
     ///
     /// Keeping the original absolute timestamps is intentional: a running
     /// protocol advances across a connectivity outage, while a paused protocol
@@ -107,7 +117,7 @@ public final class IntervalEngine {
         checkpoint: EngineCheckpoint,
         includeHeartRateHistory: Bool = true
     ) {
-        self.config = config
+        self.config = checkpoint.config ?? config
         self.hrMax = checkpoint.hrMax
         self.startedAt = checkpoint.startedAt
         self.pausedAt = checkpoint.pausedAt
@@ -120,6 +130,7 @@ public final class IntervalEngine {
         self.phaseStartHR = checkpoint.phaseStartHR
         self.lastGuidance = checkpoint.lastGuidance.map { (state: $0.state, at: $0.timestamp) }
         self.finished = checkpoint.isFinished
+        self.finishedElapsed = checkpoint.finishedElapsed
     }
 
     /// Captures every mutable input needed to continue the deterministic engine
@@ -139,7 +150,9 @@ public final class IntervalEngine {
             lastGuidance: lastGuidance.map {
                 EngineCheckpoint.Guidance(state: $0.state, timestamp: $0.at)
             },
-            isFinished: finished
+            isFinished: finished,
+            config: config,
+            finishedElapsed: finishedElapsed
         )
     }
 
@@ -179,6 +192,22 @@ public final class IntervalEngine {
         }
         skipOffset += config.phases[index].endOffset - e
         return true
+    }
+
+    /// Whether an explicit End at `now` should complete (and save) the session
+    /// rather than discard it.
+    public func endCompletesSession(at now: Date) -> Bool {
+        guard let threshold = config.finishesEarlyAfter else { return false }
+        return elapsed(at: now) >= threshold
+    }
+
+    /// Completes the session now, as if its last phase had ended. Used by
+    /// open-ended routines (Hold HR) whose End means "done", not "abort".
+    public func finish(at now: Date) {
+        guard !finished else { return }
+        finished = true
+        finishedElapsed = min(max(elapsed(at: now), 0), config.totalDuration)
+        pausedAt = nil
     }
 
     // MARK: - Input
@@ -225,12 +254,13 @@ public final class IntervalEngine {
         // checkpoint must never resurrect the final phase if a clock moves
         // backwards or a stale tick arrives.
         if finished {
-            return (finishedOutput(elapsed: max(e, config.totalDuration), at: now), haptics)
+            return (finishedOutput(elapsed: finishedElapsed ?? config.totalDuration, at: now), haptics)
         }
 
         guard let index = config.phaseIndex(atElapsed: e) else {
             finished = true
-            return (finishedOutput(elapsed: e, at: now), haptics)
+            finishedElapsed = config.totalDuration
+            return (finishedOutput(elapsed: config.totalDuration, at: now), haptics)
         }
 
         let phase = config.phases[index]
@@ -270,7 +300,7 @@ public final class IntervalEngine {
 
         let output = EngineOutput(
             phase: phase.kind,
-            phaseLabel: phase.kind.label,
+            phaseLabel: phase.label,
             ringColor: phase.kind.ringColor,
             phaseProgress: min(max(tInPhase / phase.duration, 0), 1),
             timeRemainingInPhase: max(phase.duration - tInPhase, 0),
@@ -281,7 +311,8 @@ public final class IntervalEngine {
             deadBandState: state,
             adjustmentHint: hint,
             isPaused: isPaused,
-            isFinished: false
+            isFinished: false,
+            nextRingColor: config.nextRingColor(after: index)
         )
         return (output, haptics)
     }
@@ -289,8 +320,7 @@ public final class IntervalEngine {
     // MARK: - Target line (spec §3)
 
     private func targetBand(phase: Phase, tInPhase: TimeInterval) -> ClosedRange<Double>? {
-        guard let hrMax, let fraction = phase.kind.targetFraction else { return nil }
-        let band = (fraction.lowerBound * hrMax)...(fraction.upperBound * hrMax)
+        guard let band = phase.target?.resolved(hrMax: hrMax) else { return nil }
 
         // Hold as a full band once the ramp completes, or if we never captured a
         // ramp origin (no HR at phase start → degrade to the band immediately).
@@ -306,8 +336,8 @@ public final class IntervalEngine {
 
     private func deadBandState(hr: Double?, target: ClosedRange<Double>?) -> (DeadBandState, AdjustmentHint) {
         guard let hr, let target else { return (.noTarget, .none) }
-        let low = target.lowerBound - Self.deadBandBPM
-        let high = target.upperBound + Self.deadBandBPM
+        let low = target.lowerBound - config.deadBand
+        let high = target.upperBound + config.deadBand
         if hr < low { return (.below, .up) }
         if hr > high { return (.above, .down) }
         return (.inRange, .none)
@@ -315,8 +345,8 @@ public final class IntervalEngine {
 
     private func distanceOutsideDeadBand(hr: Double, target: ClosedRange<Double>, state: DeadBandState) -> Double {
         switch state {
-        case .below: return (target.lowerBound - Self.deadBandBPM) - hr
-        case .above: return hr - (target.upperBound + Self.deadBandBPM)
+        case .below: return (target.lowerBound - config.deadBand) - hr
+        case .above: return hr - (target.upperBound + config.deadBand)
         default:     return 0
         }
     }
@@ -330,10 +360,11 @@ public final class IntervalEngine {
     }
 
     private func finishedOutput(elapsed: TimeInterval, at now: Date) -> EngineOutput {
-        let last = config.phases.last?.kind ?? .cooldown
+        let lastPhase = config.phases.last
+        let last = lastPhase?.kind ?? .cooldown
         return EngineOutput(
             phase: last,
-            phaseLabel: last.label,
+            phaseLabel: lastPhase?.label ?? "Complete",
             ringColor: last.ringColor,
             phaseProgress: 1,
             timeRemainingInPhase: 0,
@@ -344,7 +375,8 @@ public final class IntervalEngine {
             deadBandState: .noTarget,
             adjustmentHint: .none,
             isPaused: isPaused,
-            isFinished: true
+            isFinished: true,
+            nextRingColor: nil
         )
     }
 }

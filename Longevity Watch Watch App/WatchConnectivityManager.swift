@@ -10,11 +10,15 @@ final class WatchConnectivityManager: NSObject {
     var onRemoteMessage: ((SessionMessage) -> Void)?
     var onReachabilityChanged: ((Bool) -> Void)?
     var onSendFailure: ((SessionMessage) -> Void)?
+    /// Workout settings pushed by iPhone (max HR, 4×4 structure, Hold HR,
+    /// heart-check workload).
+    var onSettings: ((WorkoutSettings) -> Void)?
 
     private enum ContextKey {
         static let snapshot = "n4x4.snapshot"
         static let command = "n4x4.command"
         static let commands = "n4x4.commands"
+        static let settings = "workout.settings"
     }
 
     private let session: WCSession? = WCSession.isSupported() ? .default : nil
@@ -73,6 +77,11 @@ final class WatchConnectivityManager: NSObject {
     }
 
     private func deliver(_ context: [String: Any]) {
+        if let data = context[ContextKey.settings] as? Data,
+           let settings = try? JSONDecoder().decode(WorkoutSettings.self, from: data) {
+            onSettings?(settings)
+        }
+
         let commandData: [Data]
         if let commands = context[ContextKey.commands] as? [Data] {
             commandData = commands

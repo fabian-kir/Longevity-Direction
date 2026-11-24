@@ -437,7 +437,8 @@
 				INFOPLIST_FILE = "Longevity Compass/Info.plist";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Longevity Direction uses the camera to scan barcodes on packaged foods and to photograph meals for nutrition estimation.";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Longevity Direction reads your Apple Health data on this device so it can show what most needs your attention. Nothing leaves your iPhone.";
-				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Longevity Direction writes blood-pressure readings back to Apple Health so Health remains the single source of truth.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Longevity Direction writes blood-pressure readings and your guided workouts, routes and effort ratings to Apple Health so Health remains the single source of truth.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Longevity Direction records the GPS route of outdoor workouts and saves it with the workout in Apple Health.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Longevity Direction uses photos of meals to estimate nutrition. Photos are sent to the AI provider you configured in the Data tab.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -476,7 +477,8 @@
 				INFOPLIST_FILE = "Longevity Compass/Info.plist";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Longevity Direction uses the camera to scan barcodes on packaged foods and to photograph meals for nutrition estimation.";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Longevity Direction reads your Apple Health data on this device so it can show what most needs your attention. Nothing leaves your iPhone.";
-				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Longevity Direction writes blood-pressure readings back to Apple Health so Health remains the single source of truth.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Longevity Direction writes blood-pressure readings and your guided workouts, routes and effort ratings to Apple Health so Health remains the single source of truth.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Longevity Direction records the GPS route of outdoor workouts and saves it with the workout in Apple Health.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Longevity Direction uses photos of meals to estimate nutrition. Photos are sent to the AI provider you configured in the Data tab.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -676,8 +678,9 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Longevity-Watch-Watch-App-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Longevity Watch";
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "Longevity Direction reads your heart rate during a Norwegian 4×4 session to give real-time HR-based coaching. Nothing leaves your device.";
-				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Longevity Direction opens a workout session on your Apple Watch to read live heart rate during a Norwegian 4×4 session.";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Longevity Direction reads your heart rate and workout metrics during a guided workout to give real-time heart-rate coaching. Nothing leaves your device.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Longevity Direction saves your guided workouts, with their intervals and outdoor routes, to Apple Health.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Longevity Direction records the GPS route of outdoor workouts and saves it with the workout in Apple Health.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "FabianKirschenmann.Longevity-Compass";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -713,8 +716,9 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Longevity-Watch-Watch-App-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Longevity Watch";
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "Longevity Direction reads your heart rate during a Norwegian 4×4 session to give real-time HR-based coaching. Nothing leaves your device.";
-				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Longevity Direction opens a workout session on your Apple Watch to read live heart rate during a Norwegian 4×4 session.";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Longevity Direction reads your heart rate and workout metrics during a guided workout to give real-time heart-rate coaching. Nothing leaves your device.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Longevity Direction saves your guided workouts, with their intervals and outdoor routes, to Apple Health.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Longevity Direction records the GPS route of outdoor workouts and saves it with the workout in Apple Health.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "FabianKirschenmann.Longevity-Compass";
 				LD_RUNPATH_SEARCH_PATHS = (

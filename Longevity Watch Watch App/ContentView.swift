@@ -2,9 +2,11 @@ import IntervalEngine
 import IntervalUI
 import SwiftUI
 
-/// Compact watch screen for a Norwegian 4x4 session (spec §6.2): a phase-progress
-/// ring with the live HR at its center, phase/round label and time remaining, plus
-/// a swipe-left page carrying the Skip/Pause/End controls (spec §7).
+/// Compact watch screen for a guided session (spec §6.2): a phase-progress ring
+/// with the live HR at its center, phase label and time remaining, plus a
+/// swipe-left page carrying the Skip/Pause/End controls (spec §7). The idle
+/// screen keeps the one-tap 4×4 start first; Hold HR and the heart check sit
+/// below it.
 struct ContentView: View {
     let model: WatchN4x4SessionModel
     @State private var selectedPage = 0
@@ -29,37 +31,106 @@ struct ContentView: View {
     // MARK: - Idle
 
     private var idle: some View {
-        ZStack {
-            WatchAmbientBackdrop(tint: N4x4Palette.accent)
+        NavigationStack {
+            ZStack {
+                WatchAmbientBackdrop(tint: N4x4Palette.accent)
 
-            VStack(spacing: 9) {
-                MjolnirIcon()
-                    .frame(width: 28, height: 33)
-                    .foregroundStyle(N4x4Palette.accent)
-                    .padding(12)
-                    .glassEffect(.regular.tint(N4x4Palette.accent.opacity(0.14)), in: Circle())
+                ScrollView {
+                    VStack(spacing: 9) {
+                        MjolnirIcon()
+                            .frame(width: 28, height: 33)
+                            .foregroundStyle(N4x4Palette.accent)
+                            .padding(12)
+                            .glassEffect(.regular.tint(N4x4Palette.accent.opacity(0.14)), in: Circle())
 
-                VStack(spacing: 2) {
-                    Text("Norwegian 4×4")
-                        .font(.headline)
-                    Text("31 MIN · HR GUIDED")
-                        .font(.system(size: 9, weight: .bold))
-                        .tracking(0.55)
-                        .foregroundStyle(.secondary)
+                        VStack(spacing: 2) {
+                            Text("Norwegian 4×4")
+                                .font(.headline)
+                            Text("\(model.settings.n4x4.totalMinutes) MIN · HR GUIDED")
+                                .font(.system(size: 9, weight: .bold))
+                                .tracking(0.55)
+                                .foregroundStyle(.secondary)
+                        }
+                        .multilineTextAlignment(.center)
+
+                        Button {
+                            Task { await model.startPrimary(mode: .n4x4) }
+                        } label: {
+                            Label("Start", systemImage: "play.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.glassProminent)
+                        .tint(N4x4Palette.accent)
+
+                        modeButton(
+                            title: "Hold heart rate",
+                            detail: holdDetail,
+                            symbol: "heart.circle.fill",
+                            tint: N4x4Palette.recovery
+                        ) {
+                            Task { await model.startPrimary(mode: .steadyHeartRate) }
+                        }
+
+                        modeButton(
+                            title: "Heart check",
+                            detail: model.settings.heartCheckWorkload?.summary ?? "Set up on iPhone first",
+                            symbol: "stethoscope",
+                            tint: N4x4Palette.workload
+                        ) {
+                            Task { await model.startPrimary(mode: .heartCheck) }
+                        }
+                        .disabled(model.settings.heartCheckWorkload == nil)
+
+                        NavigationLink {
+                            WatchEquipmentPicker(selection: model.settings.lastEquipment) { equipment in
+                                model.selectEquipment(equipment)
+                            }
+                        } label: {
+                            Label(model.settings.lastEquipment.title, systemImage: model.settings.lastEquipment.systemImage)
+                                .font(.caption.weight(.medium))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.glass)
+                    }
+                    .padding(.horizontal, 8)
                 }
-                .multilineTextAlignment(.center)
-
-                Button {
-                    Task { await model.startPrimary() }
-                } label: {
-                    Label("Start", systemImage: "play.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.glassProminent)
-                .tint(N4x4Palette.accent)
             }
-            .padding(.horizontal, 8)
         }
+    }
+
+    private var holdDetail: String {
+        let steady = model.settings.steady
+        let target = steady.targetBPM ?? model.displayMaxHR.map { steady.resolvedTarget(hrMax: $0) }
+        let duration = "\(steady.durationMinutes) min"
+        return target.map { "\($0) bpm · \(duration)" } ?? duration
+    }
+
+    private func modeButton(
+        title: String,
+        detail: String,
+        symbol: String,
+        tint: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: symbol)
+                    .font(.title3)
+                    .foregroundStyle(tint)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                    Text(detail)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.glass)
     }
 
     // MARK: - Active / mirroring
@@ -70,7 +141,7 @@ struct ContentView: View {
             PhaseFlowView(
                 progress: output?.phaseProgress ?? 0,
                 color: output?.ringColor.swiftUIColor ?? N4x4Palette.warmUp,
-                nextColor: output?.phase.nextRingColor?.swiftUIColor,
+                nextColor: output?.nextRingColor?.swiftUIColor,
                 backgroundColor: .black,
                 minimumCoreRadius: 24,
                 animatesProgress: false,
@@ -124,11 +195,7 @@ struct ContentView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .strokeBorder(.white.opacity(0.18), lineWidth: 0.7)
-            }
+            .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
             sessionStatus
         }
@@ -188,11 +255,19 @@ struct ContentView: View {
                     .buttonStyle(.glass)
                 }
 
-                Button(role: .destructive) { model.end() } label: {
-                    watchControlLabel("End", symbol: "stop.fill")
+                if model.endCompletesSession {
+                    Button { model.end() } label: {
+                        watchControlLabel("Finish", symbol: "checkmark")
+                    }
+                    .buttonStyle(.glass)
+                    .tint(N4x4Palette.recovery)
+                } else {
+                    Button(role: .destructive) { model.end() } label: {
+                        watchControlLabel("End", symbol: "stop.fill")
+                    }
+                    .buttonStyle(.glass)
+                    .tint(.red)
                 }
-                .buttonStyle(.glass)
-                .tint(.red)
             }
         }
         .padding(.horizontal, 8)
@@ -226,7 +301,7 @@ struct ContentView: View {
                         .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 }
                 Button {
-                    Task { await model.startPrimary() }
+                    Task { await model.startPrimary(mode: model.program?.mode ?? .n4x4) }
                 } label: {
                     Label("Again", systemImage: "arrow.clockwise")
                         .frame(maxWidth: .infinity)
@@ -263,6 +338,9 @@ struct ContentView: View {
     private var targetHintText: String? {
         guard let t = model.output?.target else { return nil }
         let lo = Int(t.lowerBound.rounded()), hi = Int(t.upperBound.rounded())
+        if model.program?.mode == .steadyHeartRate, let band = model.program?.deadBand {
+            return "\(lo) ±\(Int(band))"
+        }
         return lo == hi ? "\(lo)" : "\(lo)–\(hi)"
     }
 
@@ -277,6 +355,31 @@ struct ContentView: View {
     private static func clock(_ seconds: TimeInterval) -> String {
         let total = Int(seconds.rounded())
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+private struct WatchEquipmentPicker: View {
+    @Environment(\.dismiss) private var dismiss
+    let selection: WorkoutEquipment
+    let onSelect: (WorkoutEquipment) -> Void
+
+    var body: some View {
+        List(WorkoutEquipment.pickerOrder) { equipment in
+            Button {
+                onSelect(equipment)
+                dismiss()
+            } label: {
+                HStack {
+                    Label(equipment.title, systemImage: equipment.systemImage)
+                    Spacer()
+                    if equipment == selection {
+                        Image(systemName: "checkmark")
+                            .foregroundStyle(N4x4Palette.accent)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Performed on")
     }
 }
 

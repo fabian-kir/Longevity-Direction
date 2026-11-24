@@ -21,9 +21,17 @@ final class N4x4WorkoutRecorder {
         sessionID: UUID,
         startedAt: Date,
         hrMax: Double?,
-        details: N4x4WorkoutDetails
+        details: N4x4WorkoutDetails,
+        program: ProtocolConfig = .norwegian4x4,
+        workloadSummary: String? = nil
     ) {
-        if currentLog?.sessionID == sessionID { return }
+        if currentLog?.sessionID == sessionID {
+            // A Watch snapshot can name the equipment after the log began.
+            if let currentLog, details.equipment != .unspecified, currentLog.equipment != details.equipment {
+                currentLog.equipment = details.equipment
+            }
+            return
+        }
 
         let descriptor = FetchDescriptor<N4x4WorkoutLog>(
             predicate: #Predicate { $0.sessionID == sessionID }
@@ -33,9 +41,14 @@ final class N4x4WorkoutRecorder {
             sessionID: sessionID,
             startedAt: startedAt,
             estimatedHRMax: hrMax,
-            equipment: details.equipment
+            equipment: details.equipment,
+            mode: program.mode
         )
-        if existing == nil { context.insert(log) }
+        if existing == nil {
+            log.targetDeadBand = program.deadBand
+            if program.mode == .heartCheck { log.workloadSummary = workloadSummary }
+            context.insert(log)
+        }
 
         currentLog = log
         liveFrames = log.frames
@@ -49,9 +62,18 @@ final class N4x4WorkoutRecorder {
         startedAt: Date,
         hrMax: Double?,
         details: N4x4WorkoutDetails,
+        program: ProtocolConfig = .norwegian4x4,
+        workloadSummary: String? = nil,
         capturedAt: Date = .now
     ) {
-        begin(sessionID: sessionID, startedAt: startedAt, hrMax: hrMax, details: details)
+        begin(
+            sessionID: sessionID,
+            startedAt: startedAt,
+            hrMax: hrMax,
+            details: details,
+            program: program,
+            workloadSummary: workloadSummary
+        )
         guard let currentLog else { return }
 
         let frame = N4x4WorkoutFrame(capturedAt: capturedAt, output: output)
@@ -102,6 +124,13 @@ final class N4x4WorkoutRecorder {
         try? context.save()
     }
 
+    func log(for sessionID: UUID) -> N4x4WorkoutLog? {
+        let descriptor = FetchDescriptor<N4x4WorkoutLog>(
+            predicate: #Predicate { $0.sessionID == sessionID }
+        )
+        return try? context.fetch(descriptor).first
+    }
+
     func resetLiveFrames() {
         liveFrames = []
         lastCompletedLogID = nil
@@ -121,12 +150,12 @@ final class N4x4WorkoutRecorder {
             log.peakHeartRate = heartRates.max()
         }
 
+        let deadBand = log.targetDeadBand ?? IntervalEngine.deadBandBPM
         let targeted = liveFrames.compactMap { frame -> Bool? in
             guard let bpm = frame.bpm,
                   let low = frame.targetLower,
                   let high = frame.targetUpper else { return nil }
-            return bpm >= low - IntervalEngine.deadBandBPM
-                && bpm <= high + IntervalEngine.deadBandBPM
+            return bpm >= low - deadBand && bpm <= high + deadBand
         }
         if !targeted.isEmpty {
             log.targetAdherence = Double(targeted.filter { $0 }.count) / Double(targeted.count)
@@ -134,6 +163,40 @@ final class N4x4WorkoutRecorder {
 
         log.averageOneMinuteRise = averageOneMinuteChange(for: .highIntensity, descending: false)
         log.averageOneMinuteRecovery = averageOneMinuteChange(for: .activeRecovery, descending: true)
+
+        if log.mode == .heartCheck, let result = Self.heartCheckResult(from: liveFrames) {
+            log.workloadHeartRate = result.workloadHeartRate
+            log.stopHeartRate = result.stopHeartRate
+            log.recoveryDropAfter60 = result.dropAfter60
+            log.recoveryDropAfter120 = result.dropAfter120
+        }
+    }
+
+    /// Workload HR is the mean of the workload's last minute; the drops are
+    /// measured from the last workload reading to the readings nearest 60 s and
+    /// 120 s into the stillness phase.
+    static func heartCheckResult(from frames: [N4x4WorkoutFrame]) -> HeartCheckResult? {
+        let workload = frames.filter { $0.phase == .fixedWorkload && $0.bpm != nil }
+            .sorted { $0.elapsed < $1.elapsed }
+        guard let lastWorkload = workload.last, let stopHR = lastWorkload.bpm else { return nil }
+        let lastMinute = workload.filter { $0.elapsed >= lastWorkload.elapsed - 60 }.compactMap(\.bpm)
+        guard !lastMinute.isEmpty else { return nil }
+
+        let stillness = frames.filter { $0.phase == .stillness && $0.bpm != nil }
+        let stopElapsed = stillness.map(\.elapsed).min() ?? lastWorkload.elapsed
+        func reading(after seconds: TimeInterval) -> Double? {
+            stillness
+                .filter { abs($0.elapsed - (stopElapsed + seconds)) <= 6 }
+                .min { abs($0.elapsed - (stopElapsed + seconds)) < abs($1.elapsed - (stopElapsed + seconds)) }?
+                .bpm
+        }
+
+        return HeartCheckResult(
+            workloadHeartRate: lastMinute.reduce(0, +) / Double(lastMinute.count),
+            stopHeartRate: stopHR,
+            dropAfter60: reading(after: 60).map { stopHR - $0 },
+            dropAfter120: reading(after: 120).map { stopHR - $0 }
+        )
     }
 
     private enum PhaseFamily { case highIntensity, activeRecovery }
@@ -145,6 +208,9 @@ final class N4x4WorkoutRecorder {
             case .activeRecovery(let round): return "recovery-\(round)"
             case .warmUp: return "warmup"
             case .cooldown: return "cooldown"
+            case .steady: return "steady"
+            case .fixedWorkload: return "workload"
+            case .stillness: return "stillness"
             }
         }
 

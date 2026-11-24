@@ -1,4 +1,5 @@
 import Charts
+import IntervalEngine
 import IntervalUI
 import SwiftData
 import SwiftUI
@@ -136,7 +137,10 @@ struct N4x4HeartRateChart: View {
 
 struct N4x4SetupSheet: View {
     @Environment(\.dismiss) private var dismiss
+    let mode: WorkoutMode
     @Binding var details: N4x4WorkoutDetails
+    @Binding var settings: WorkoutSettings
+    let hrMax: Double?
     let start: () -> Void
 
     var body: some View {
@@ -144,7 +148,7 @@ struct N4x4SetupSheet: View {
             Form {
                 Section {
                     Picker("Performed on", selection: $details.equipment) {
-                        ForEach(N4x4Equipment.allCases) { equipment in
+                        ForEach(N4x4Equipment.pickerOrder) { equipment in
                             Label(equipment.title, systemImage: equipment.systemImage)
                                 .tag(equipment)
                         }
@@ -152,16 +156,31 @@ struct N4x4SetupSheet: View {
                 } header: {
                     Text("Equipment")
                 } footer: {
-                    Text("You can add the machine's calorie, distance, and step estimates after the workout.")
+                    Text(equipmentFooter)
+                }
+
+                if mode == .steadyHeartRate {
+                    Section {
+                        Stepper(value: targetBinding, in: 80...200, step: 1) {
+                            LabeledContent("Target", value: "\(targetBinding.wrappedValue) bpm")
+                        }
+                        Stepper(value: $settings.steady.durationMinutes, in: 10...180, step: 5) {
+                            LabeledContent("Duration", value: "\(settings.steady.durationMinutes) min")
+                        }
+                    } header: {
+                        Text("Hold")
+                    } footer: {
+                        Text("Your Watch taps you once you're more than \(settings.steady.toleranceBPM) bpm off target. Finish any time after 5 minutes and the session is saved.")
+                    }
                 }
 
                 Section {
-                    Label("The workout is saved to Apple Health when the full protocol completes.", systemImage: "heart.text.clipboard")
+                    Label("The workout is saved to Apple Health when it completes.", systemImage: "heart.text.clipboard")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }
-            .navigationTitle("Workout setup")
+            .navigationTitle(mode == .steadyHeartRate ? "Hold heart rate" : "Workout setup")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -177,25 +196,46 @@ struct N4x4SetupSheet: View {
             }
         }
     }
+
+    /// Editing the target stores it, so the next session starts from it.
+    private var targetBinding: Binding<Int> {
+        Binding(
+            get: { settings.steady.resolvedTarget(hrMax: hrMax) },
+            set: { settings.steady.targetBPM = $0 }
+        )
+    }
+
+    private var equipmentFooter: String {
+        if details.equipment.recordsRoute {
+            return "Recorded as an Apple Health \(details.equipment.title.lowercased()) with your GPS route."
+        }
+        if details.equipment.acceptsDistanceCorrection {
+            return "Recorded as an Apple Health \(details.equipment.title.lowercased()). You can correct distance\(details.equipment.acceptsIncline ? " and incline" : "") afterwards."
+        }
+        return "Choosing the equipment lets Apple Health record the matching workout type."
+    }
 }
 
-struct N4x4MachineResultsSheet: View {
+/// After-workout corrections for values the Watch can't measure on a machine,
+/// plus the effort rating. Calories are deliberately left to Apple.
+struct N4x4WorkoutDetailsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
+    @Environment(AppServices.self) private var services
 
     let log: N4x4WorkoutLog
     @State private var equipment: N4x4Equipment
-    @State private var calories: String
     @State private var distance: String
-    @State private var steps: String
+    @State private var incline: String
+    @State private var effort: Int?
     @State private var notes: String
 
     init(log: N4x4WorkoutLog) {
         self.log = log
         _equipment = State(initialValue: log.equipment)
-        _calories = State(initialValue: Self.text(log.machineCalories))
-        _distance = State(initialValue: Self.text(log.machineDistanceKilometers))
-        _steps = State(initialValue: log.machineSteps.map(String.init) ?? "")
+        _distance = State(initialValue: Self.text(log.correctedDistanceKilometers))
+        _incline = State(initialValue: Self.text(log.inclinePercent))
+        _effort = State(initialValue: log.effortScore)
         _notes = State(initialValue: log.notes)
     }
 
@@ -204,23 +244,43 @@ struct N4x4MachineResultsSheet: View {
             Form {
                 Section("Equipment") {
                     Picker("Performed on", selection: $equipment) {
-                        ForEach(N4x4Equipment.allCases) { item in
+                        ForEach(N4x4Equipment.pickerOrder) { item in
                             Label(item.title, systemImage: item.systemImage).tag(item)
                         }
                     }
                 }
 
+                if equipment.acceptsDistanceCorrection || equipment.acceptsIncline {
+                    Section {
+                        if equipment.acceptsDistanceCorrection {
+                            LabeledContent("Distance") {
+                                TextField(distancePlaceholder, text: $distance)
+                                    .keyboardType(.decimalPad)
+                                    .multilineTextAlignment(.trailing)
+                                Text("km").foregroundStyle(.secondary)
+                            }
+                        }
+                        if equipment.acceptsIncline {
+                            LabeledContent("Incline") {
+                                TextField("0", text: $incline)
+                                    .keyboardType(.decimalPad)
+                                    .multilineTextAlignment(.trailing)
+                                Text("%").foregroundStyle(.secondary)
+                            }
+                        }
+                    } header: {
+                        Text("From the machine")
+                    } footer: {
+                        Text(correctionFooter)
+                    }
+                }
+
                 Section {
-                    TextField("Calories (kcal)", text: $calories)
-                        .keyboardType(.decimalPad)
-                    TextField("Distance (km)", text: $distance)
-                        .keyboardType(.decimalPad)
-                    TextField("Steps", text: $steps)
-                        .keyboardType(.numberPad)
+                    EffortPicker(score: effort) { effort = $0 }
                 } header: {
-                    Text("Machine estimate")
+                    Text("Effort")
                 } footer: {
-                    Text("These values stay labeled as machine estimates in Longevity Direction. Apple Health keeps the workout's own measured values.")
+                    Text("Saved to Apple Health as the workout's effort rating.")
                 }
 
                 Section("Notes") {
@@ -228,7 +288,7 @@ struct N4x4MachineResultsSheet: View {
                         .lineLimit(2...5)
                 }
             }
-            .navigationTitle("Machine results")
+            .navigationTitle("Workout details")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -242,13 +302,29 @@ struct N4x4MachineResultsSheet: View {
         }
     }
 
+    private var distancePlaceholder: String {
+        log.appleDistanceKilometers.map { Self.text($0) } ?? "0.0"
+    }
+
+    private var correctionFooter: String {
+        var text = "Use the numbers on the machine's display. They replace the Watch's estimate in Longevity Direction; Apple Health keeps the Watch's own measurement."
+        if equipment.acceptsIncline {
+            text += " Incline also gives the elevation you climbed."
+        }
+        return text
+    }
+
     private func save() {
         log.equipment = equipment
-        log.machineCalories = Self.number(calories)
-        log.machineDistanceKilometers = Self.number(distance)
-        log.machineSteps = Int(steps)
+        log.correctedDistanceKilometers = equipment.acceptsDistanceCorrection ? Self.number(distance) : nil
+        log.inclinePercent = equipment.acceptsIncline ? Self.number(incline) : nil
         log.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         try? context.save()
+        if effort != log.effortScore {
+            let linker = services.n4x4.healthLinker
+            let score = effort
+            Task { await linker.setEffort(score, for: log) }
+        }
         dismiss()
     }
 
@@ -261,22 +337,92 @@ struct N4x4MachineResultsSheet: View {
     }
 }
 
+/// Apple's 1–10 workout effort scale with its four bands.
+struct EffortPicker: View {
+    let score: Int?
+    let onChange: (Int?) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("How hard was it?")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(score.map { "\($0) · \(Self.band(for: $0))" } ?? "Not rated")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            HStack(spacing: 5) {
+                ForEach(1...10, id: \.self) { value in
+                    Button {
+                        onChange(score == value ? nil : value)
+                    } label: {
+                        Text("\(value)")
+                            .font(.caption.weight(.semibold).monospacedDigit())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                            .frame(maxWidth: .infinity, minHeight: 30)
+                            .foregroundStyle((score ?? 0) >= value ? .white : .primary)
+                            .background(
+                                (score ?? 0) >= value ? Self.color(for: value) : Color.secondary.opacity(0.14),
+                                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Effort \(value), \(Self.band(for: value))")
+                }
+            }
+        }
+    }
+
+    static func band(for score: Int) -> String {
+        switch score {
+        case ...3: return "Easy"
+        case 4...6: return "Moderate"
+        case 7...8: return "Hard"
+        default: return "All out"
+        }
+    }
+
+    private static func color(for score: Int) -> Color {
+        switch score {
+        case ...3: return N4x4Palette.recovery
+        case 4...6: return N4x4Palette.workload
+        case 7...8: return N4x4Palette.effort
+        default: return Color(red: 0.55, green: 0.12, blue: 0.20)
+        }
+    }
+}
+
 struct N4x4WorkoutHistoryView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \N4x4WorkoutLog.startedAt, order: .reverse) private var logs: [N4x4WorkoutLog]
 
     var body: some View {
         List {
-            ForEach(logs) { log in
-                NavigationLink {
-                    N4x4WorkoutDetailView(log: log)
-                } label: {
-                    N4x4WorkoutRow(log: log)
+            if logs.contains(where: { $0.mode == .heartCheck && $0.isCompleted }) {
+                Section {
+                    NavigationLink {
+                        HeartCheckTrendView()
+                    } label: {
+                        Label("Heart check trend", systemImage: "stethoscope")
+                    }
                 }
-                .swipeActions {
-                    Button("Delete", role: .destructive) {
-                        context.delete(log)
-                        try? context.save()
+            }
+
+            Section {
+                ForEach(logs) { log in
+                    NavigationLink {
+                        N4x4WorkoutDetailView(log: log)
+                    } label: {
+                        N4x4WorkoutRow(log: log)
+                    }
+                    .swipeActions {
+                        Button("Delete", role: .destructive) {
+                            context.delete(log)
+                            try? context.save()
+                        }
                     }
                 }
             }
@@ -285,17 +431,19 @@ struct N4x4WorkoutHistoryView: View {
         .overlay {
             if logs.isEmpty {
                 ContentUnavailableView(
-                    "No N4x4 workouts yet",
+                    "No workouts yet",
                     systemImage: "waveform.path.ecg",
                     description: Text("Completed and stopped sessions will appear here.")
                 )
             }
         }
-        .navigationTitle("N4x4 history")
+        .navigationTitle("Workout history")
     }
 }
 
 struct N4x4WorkoutDetailView: View {
+    @Environment(AppServices.self) private var services
+    @Query(sort: \N4x4WorkoutLog.startedAt, order: .reverse) private var logs: [N4x4WorkoutLog]
     let log: N4x4WorkoutLog
     @State private var editTarget: N4x4WorkoutLog?
 
@@ -303,8 +451,13 @@ struct N4x4WorkoutDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Label(log.equipment.title, systemImage: log.equipment.systemImage)
+                    Text(log.title)
                         .font(.title2.bold())
+                    if log.equipment != .unspecified {
+                        Label(log.equipment.title, systemImage: log.equipment.systemImage)
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                    }
                     Text(log.startedAt.formatted(date: .complete, time: .shortened))
                         .foregroundStyle(.secondary)
                     Label(healthKitLabel, systemImage: healthKitSymbol)
@@ -320,16 +473,31 @@ struct N4x4WorkoutDetailView: View {
                 .padding(16)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
+                if log.mode == .heartCheck {
+                    HeartCheckComparison(log: log, logs: logs)
+                }
+
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                     metric("Duration", clock(log.duration), "timer")
                     metric("Average HR", bpm(log.averageHeartRate), "heart")
-                    metric("Peak HR", bpm(log.peakHeartRate), "heart.fill")
-                    metric("In target", percent(log.targetAdherence), "scope")
-                    metric("1-min rise", signedBPM(log.averageOneMinuteRise), "arrow.up.right")
-                    metric("1-min recovery", signedBPM(log.averageOneMinuteRecovery), "arrow.down.right")
+                    switch log.mode {
+                    case .n4x4:
+                        metric("Peak HR", bpm(log.peakHeartRate), "heart.fill")
+                        metric("In target", percent(log.targetAdherence), "scope")
+                        metric("1-min rise", signedBPM(log.averageOneMinuteRise), "arrow.up.right")
+                        metric("1-min recovery", signedBPM(log.averageOneMinuteRecovery), "arrow.down.right")
+                    case .steadyHeartRate:
+                        metric("Peak HR", bpm(log.peakHeartRate), "heart.fill")
+                        metric("In range", percent(log.targetAdherence), "scope")
+                    case .heartCheck:
+                        metric("HR at workload", bpm(log.workloadHeartRate), "speedometer")
+                        metric("HR when stopping", bpm(log.stopHeartRate), "figure.stand")
+                        metric("Drop after 1 min", bpm(log.recoveryDropAfter60), "arrow.down.right")
+                        metric("Drop after 2 min", bpm(log.recoveryDropAfter120), "arrow.down.right")
+                    }
                 }
 
-                machineSummary
+                measurementsSection
 
                 if !log.notes.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
@@ -349,41 +517,115 @@ struct N4x4WorkoutDetailView: View {
             }
         }
         .sheet(item: $editTarget) { target in
-            N4x4MachineResultsSheet(log: target)
+            N4x4WorkoutDetailsSheet(log: target)
+        }
+        .task(id: log.sessionID) {
+            guard log.isCompleted, log.healthKitSaveState != .notRequested, log.appleActiveCalories == nil else { return }
+            await services.n4x4.healthLinker.refresh(log)
         }
     }
 
     private var chartLegend: some View {
         HStack(spacing: 14) {
             Label("BPM", systemImage: "waveform.path.ecg").foregroundStyle(.pink)
-            Label("Algorithm target", systemImage: "line.diagonal").foregroundStyle(.yellow)
+            if log.mode != .heartCheck {
+                Label("Target", systemImage: "line.diagonal").foregroundStyle(.yellow)
+            }
         }
         .font(.caption.weight(.semibold))
     }
 
+    /// Distance, pace and calories as Apple Health measured them, with the
+    /// user's machine corrections marked where they apply.
     @ViewBuilder
-    private var machineSummary: some View {
-        if log.machineCalories != nil || log.machineDistanceKilometers != nil || log.machineSteps != nil {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Machine estimate").font(.headline)
-                HStack(spacing: 18) {
-                    if let value = log.machineCalories {
-                        Label("\(value.formatted(.number.precision(.fractionLength(0)))) kcal", systemImage: "flame")
-                    }
-                    if let value = log.machineDistanceKilometers {
-                        Label("\(value.formatted(.number.precision(.fractionLength(0...2)))) km", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-                    }
-                    if let value = log.machineSteps {
-                        Label(value.formatted(), systemImage: "shoeprints.fill")
+    private var measurementsSection: some View {
+        let rows = measurementRows
+        if !rows.isEmpty || log.effortScore != nil {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Measurements").font(.headline)
+                ForEach(rows, id: \.title) { row in
+                    HStack {
+                        Label(row.title, systemImage: row.symbol)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 1) {
+                            Text(row.value)
+                                .font(.body.weight(.semibold).monospacedDigit())
+                            if let note = row.note {
+                                Text(note)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                if let effort = log.effortScore {
+                    HStack {
+                        Label("Effort", systemImage: "gauge.with.dots.needle.67percent")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(effort) · \(EffortPicker.band(for: effort))")
+                            .font(.body.weight(.semibold).monospacedDigit())
+                    }
+                }
             }
+            .font(.subheadline)
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
+    }
+
+    private struct MeasurementRow {
+        let title: String
+        let symbol: String
+        let value: String
+        let note: String?
+    }
+
+    private var measurementRows: [MeasurementRow] {
+        var rows: [MeasurementRow] = []
+        if let distance = log.distanceKilometers {
+            let note: String? = if log.correctedDistanceKilometers != nil, let apple = log.appleDistanceKilometers {
+                "From the machine · Watch measured \(apple.formatted(.number.precision(.fractionLength(2)))) km"
+            } else if log.correctedDistanceKilometers != nil {
+                "From the machine"
+            } else {
+                "Apple Health"
+            }
+            rows.append(MeasurementRow(
+                title: "Distance",
+                symbol: "point.topleft.down.to.point.bottomright.curvepath",
+                value: "\(distance.formatted(.number.precision(.fractionLength(2)))) km",
+                note: note
+            ))
+            if distance > 0, log.duration > 0, [.treadmill, .treadmillWalk, .outdoor, .outdoorWalk].contains(log.equipment) {
+                let secondsPerKm = log.duration / distance
+                rows.append(MeasurementRow(
+                    title: "Average pace",
+                    symbol: "speedometer",
+                    value: "\(clock(secondsPerKm)) /km",
+                    note: nil
+                ))
+            }
+        }
+        if let incline = log.inclinePercent {
+            rows.append(MeasurementRow(
+                title: "Incline",
+                symbol: "triangle",
+                value: "\(incline.formatted(.number.precision(.fractionLength(0...1))))%",
+                note: log.elevationGainMeters.map { "≈ \(Int($0.rounded())) m climbed" }
+            ))
+        }
+        if let calories = log.appleActiveCalories {
+            rows.append(MeasurementRow(
+                title: "Active calories",
+                symbol: "flame",
+                value: "\(Int(calories.rounded())) kcal",
+                note: "Apple Health"
+            ))
+        }
+        return rows
     }
 
     private func metric(_ title: String, _ value: String, _ symbol: String) -> some View {
@@ -440,14 +682,14 @@ struct N4x4WorkoutRow: View {
 
     var body: some View {
         HStack(spacing: 13) {
-            Image(systemName: log.equipment.systemImage)
+            Image(systemName: symbol)
                 .font(.title3)
                 .foregroundStyle(log.isCompleted ? N4x4Palette.recovery : .secondary)
                 .frame(width: 42, height: 42)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(log.equipment.title)
+                Text(log.title)
                     .font(.headline)
                 Text(log.startedAt.formatted(date: .abbreviated, time: .shortened))
                     .font(.caption)
@@ -461,9 +703,20 @@ struct N4x4WorkoutRow: View {
         .padding(.vertical, 3)
     }
 
+    private var symbol: String {
+        switch log.mode {
+        case .n4x4: return log.equipment.systemImage
+        case .steadyHeartRate: return "heart.circle"
+        case .heartCheck: return "stethoscope"
+        }
+    }
+
     private var summary: String {
         var parts = [Self.clock(log.duration)]
-        if let average = log.averageHeartRate {
+        if log.equipment != .unspecified { parts.append(log.equipment.title) }
+        if log.mode == .heartCheck, let drop = log.recoveryDropAfter60 {
+            parts.append("−\(Int(drop.rounded())) bpm in 1 min")
+        } else if let average = log.averageHeartRate {
             parts.append("\(Int(average.rounded())) avg bpm")
         }
         if !log.isCompleted { parts.append("Stopped") }

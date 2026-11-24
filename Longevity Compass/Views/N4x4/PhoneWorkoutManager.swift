@@ -17,6 +17,8 @@ final class PhoneWorkoutManager: NSObject {
     private var localBuilder: HKLiveWorkoutBuilder?
     private var mirroredSession: HKWorkoutSession?
     private var onHR: ((Double, Date) -> Void)?
+    private var segments = PhaseSegmentTracker()
+    private lazy var route = WorkoutRouteRecorder(healthStore: healthStore)
 
     /// Called when HealthKit delivers the Watch's mirrored workout session. The
     /// `didSet` replay avoids losing a session that arrived during app launch,
@@ -63,31 +65,29 @@ final class PhoneWorkoutManager: NSObject {
         }
     }
 
-    private static func hiitConfiguration() -> HKWorkoutConfiguration {
-        let configuration = HKWorkoutConfiguration()
-        configuration.activityType = .highIntensityIntervalTraining
-        configuration.locationType = .unknown
-        return configuration
-    }
-
-    /// Launch or wake the Watch app with the same HIIT configuration. The Watch
-    /// creates the primary wrist-sensor session and starts mirroring it back.
+    /// Launch or wake the Watch app with the workout type for `equipment`. The
+    /// Watch creates the primary wrist-sensor session and starts mirroring it
+    /// back.
     @discardableResult
-    func startWatchApp() async -> Bool {
+    func startWatchApp(equipment: WorkoutEquipment, mode: WorkoutMode) async -> Bool {
         guard HKHealthStore.isHealthDataAvailable() else { return false }
         do {
-            try await healthStore.startWatchApp(toHandle: Self.hiitConfiguration())
+            try await healthStore.startWatchApp(toHandle: equipment.workoutConfiguration(for: mode))
             return true
         } catch {
             return false
         }
     }
 
-    /// Start a HIIT workout session and begin streaming HR. Returns `false` if a
-    /// session can't be created (no HealthKit / no sensor) so the caller can
-    /// degrade to timer-only.
+    /// Start a workout session of the type matching `equipment` and begin
+    /// streaming HR. Returns `false` if a session can't be created (no
+    /// HealthKit / no sensor) so the caller can degrade to timer-only.
     @discardableResult
-    func startLocal(onHR: @escaping (Double, Date) -> Void) -> Bool {
+    func startLocal(
+        equipment: WorkoutEquipment,
+        mode: WorkoutMode,
+        onHR: @escaping (Double, Date) -> Void
+    ) -> Bool {
         guard HKHealthStore.isHealthDataAvailable() else { return false }
         self.onHR = onHR
 
@@ -95,7 +95,7 @@ final class PhoneWorkoutManager: NSObject {
             return true
         }
 
-        let config = Self.hiitConfiguration()
+        let config = equipment.workoutConfiguration(for: mode)
 
         do {
             let session = try HKWorkoutSession(healthStore: healthStore, configuration: config)
@@ -109,6 +109,8 @@ final class PhoneWorkoutManager: NSObject {
             let startDate = Date()
             session.startActivity(with: startDate)
             builder.beginCollection(withStart: startDate) { _, _ in }
+            segments.reset()
+            if equipment.recordsRoute { route.start() }
             return true
         } catch {
             self.onHR = nil
@@ -118,7 +120,17 @@ final class PhoneWorkoutManager: NSObject {
 
     /// Stop only the phone's standalone source. An incoming Watch mirror is not
     /// touched, which lets the protocol continue while roles are being resynced.
+    /// Marks phase boundaries for the saved workout's segments.
+    func observePhase(_ kind: PhaseKind, label: String, at date: Date) {
+        guard localSession != nil else { return }
+        segments.observe(kind: kind, label: label, at: date)
+    }
+
     func stopLocal() {
+        if localSession != nil {
+            route.discard()
+            segments.reset()
+        }
         onHR = nil
         localSession?.delegate = nil
         localBuilder?.delegate = nil
@@ -130,17 +142,22 @@ final class PhoneWorkoutManager: NSObject {
         localBuilder = nil
     }
 
-    /// Ends collection and asks HealthKit to create the completed HIIT workout.
-    /// State is detached synchronously so ordinary teardown cannot discard the
-    /// builder while the asynchronous save is in flight.
+    /// Ends collection and asks HealthKit to create the completed workout with
+    /// a segment per phase. State is detached synchronously so ordinary
+    /// teardown cannot discard the builder while the asynchronous save is in
+    /// flight.
     @discardableResult
     func completeLocalWorkout(
         at endDate: Date,
         sessionID: UUID,
-        indoor: Bool?,
+        mode: WorkoutMode,
+        equipment: WorkoutEquipment,
         completion: @escaping (Error?) -> Void
     ) -> Bool {
         guard let session = localSession, let builder = localBuilder else { return false }
+        let events = WorkoutHealthMetadata.segmentEvents(segments.finish(at: endDate))
+        segments.reset()
+        let pendingRoute = route.stop()
 
         onHR = nil
         localSession = nil
@@ -151,21 +168,24 @@ final class PhoneWorkoutManager: NSObject {
 
         Task { @MainActor in
             do {
+                if !events.isEmpty { try? await builder.addWorkoutEvents(events) }
                 try await builder.endCollection(at: endDate)
-                var metadata: [String: Any] = [
-                    HKMetadataKeyWorkoutBrandName: "Longevity Direction N4x4",
-                    HKMetadataKeySyncIdentifier: sessionID.uuidString,
-                    HKMetadataKeySyncVersion: 1,
-                ]
-                if let indoor { metadata[HKMetadataKeyIndoorWorkout] = indoor }
-                try await builder.addMetadata(metadata)
-                let error = await withCheckedContinuation { continuation in
-                    builder.finishWorkout { _, error in
-                        continuation.resume(returning: error)
+                try await builder.addMetadata(
+                    WorkoutHealthMetadata.workout(mode: mode, sessionID: sessionID, equipment: equipment)
+                )
+                let (workout, error) = await withCheckedContinuation { continuation in
+                    builder.finishWorkout { workout, error in
+                        continuation.resume(returning: (workout, error))
                     }
+                }
+                if let workout {
+                    _ = try? await pendingRoute?.finishRoute(with: workout, metadata: nil)
+                } else {
+                    pendingRoute?.discard()
                 }
                 completion(error)
             } catch {
+                pendingRoute?.discard()
                 builder.discardWorkout()
                 completion(error)
             }
@@ -213,12 +233,7 @@ final class PhoneWorkoutManager: NSObject {
         }
     }
 
-    // Compatibility aliases while callers migrate to the role-explicit API.
-    @discardableResult
-    func start(onHR: @escaping (Double, Date) -> Void) -> Bool {
-        startLocal(onHR: onHR)
-    }
-
+    // Compatibility alias while callers migrate to the role-explicit API.
     func stop() {
         teardown()
     }
@@ -250,6 +265,8 @@ final class PhoneWorkoutManager: NSObject {
             handleMirroredDisconnect(session: session, error: error)
         } else if localSession === session {
             onHR = nil
+            route.discard()
+            segments.reset()
             localBuilder?.delegate = nil
             localBuilder?.discardWorkout()
             localBuilder = nil

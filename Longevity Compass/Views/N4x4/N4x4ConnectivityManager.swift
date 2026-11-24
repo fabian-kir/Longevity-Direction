@@ -19,12 +19,14 @@ final class N4x4ConnectivityManager: NSObject {
         static let snapshot = "n4x4.snapshot"
         static let command = "n4x4.command"
         static let commands = "n4x4.commands"
+        static let settings = "workout.settings"
     }
 
     private let session: WCSession? = WCSession.isSupported() ? .default : nil
     private var latestSnapshotData: Data?
     private var latestCommandData: Data?
     private var commandLogData: [Data] = []
+    private var settingsData: Data?
 
     var isReachable: Bool { session?.isReachable == true }
     var isWatchAvailable: Bool {
@@ -36,6 +38,10 @@ final class N4x4ConnectivityManager: NSObject {
         guard let session else { return }
         session.delegate = self
         session.activate()
+    }
+
+    private func pushPendingSettings() {
+        updateApplicationContext()
     }
 
     /// Sends immediately when possible and always retains the newest state for
@@ -50,6 +56,15 @@ final class N4x4ConnectivityManager: NSObject {
             Task { @MainActor [weak self] in self?.onSendFailure?(message) }
         }
         return true
+    }
+
+    /// Makes the workout settings available to the Watch, which uses them for
+    /// Watch-only starts. Application context delivers them even while the
+    /// Watch app isn't running.
+    func pushSettings(_ settings: WorkoutSettings) {
+        guard let data = try? JSONEncoder().encode(settings), data != settingsData else { return }
+        settingsData = data
+        updateApplicationContext()
     }
 
     private func persist(_ data: Data, for message: SessionMessage) {
@@ -67,11 +82,13 @@ final class N4x4ConnectivityManager: NSObject {
     }
 
     private func updateApplicationContext() {
-        guard let session else { return }
+        // Before activation the update would fail; activation re-sends it.
+        guard let session, session.activationState == .activated else { return }
         var context: [String: Any] = [:]
         if let latestSnapshotData { context[ContextKey.snapshot] = latestSnapshotData }
         if let latestCommandData { context[ContextKey.command] = latestCommandData }
         if !commandLogData.isEmpty { context[ContextKey.commands] = commandLogData }
+        if let settingsData { context[ContextKey.settings] = settingsData }
         guard !context.isEmpty else { return }
         try? session.updateApplicationContext(context)
     }
@@ -122,6 +139,8 @@ extension N4x4ConnectivityManager: WCSessionDelegate {
         Task { @MainActor [weak self] in
             self?.deliver(context)
             self?.onReachabilityChanged?(session.isReachable)
+            // Settings pushed before activation completed were not delivered.
+            self?.pushPendingSettings()
         }
     }
 

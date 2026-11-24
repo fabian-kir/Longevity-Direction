@@ -2,9 +2,10 @@ import Foundation
 import IntervalEngine
 import Observation
 
-/// App-lifetime Watch coordinator. Whenever a Watch is present it owns the
-/// protocol engine and wrist heart-rate stream, regardless of which device the
-/// user used to start the session. A phone checkpoint is adopted without
+/// App-lifetime Watch coordinator for every guided routine (4×4, Hold HR,
+/// heart check). Whenever a Watch is present it owns the protocol engine and
+/// wrist heart-rate stream, regardless of which device the user used to start
+/// the session. A phone checkpoint is adopted without
 /// resetting elapsed time; connection loss never stops the local workout.
 @Observable
 @MainActor
@@ -26,6 +27,16 @@ final class WatchN4x4SessionModel {
     private(set) var latestHR: Double?
     private(set) var timerOnlyReason: TimerOnlyReason = .noHRMax
     var showTimerOnlyWarning = false
+    /// Settings synced from iPhone. The equipment choice can also be changed
+    /// on the Watch before a start.
+    private(set) var settings: WorkoutSettings = WatchSettingsStore.load()
+    /// Equipment of the running session (from the start screen, the phone's
+    /// snapshot, or the configuration HealthKit launched us with).
+    private(set) var equipment: WorkoutEquipment = .unspecified
+    /// The running (or last finished) routine.
+    private(set) var program: ProtocolConfig?
+    /// HRmax for previews on the start screen (custom value or estimate).
+    private(set) var displayMaxHR: Double?
 
     private let workout = WatchWorkoutManager()
     private let haptics = WatchHapticEngine()
@@ -62,6 +73,9 @@ final class WatchN4x4SessionModel {
         connectivity.onReachabilityChanged = { [weak self] reachable in
             self?.handleReachabilityChange(reachable)
         }
+        connectivity.onSettings = { [weak self] settings in
+            self?.applySyncedSettings(settings)
+        }
         connectivity.activate()
 
         workout.onRemoteMessage = { [weak self] message in
@@ -83,7 +97,27 @@ final class WatchN4x4SessionModel {
     }
 
     func onAppear() {
-        Task { _ = await ensureAuthorization() }
+        Task {
+            _ = await ensureAuthorization()
+            if let custom = settings.customMaxHeartRate {
+                displayMaxHR = Double(custom)
+            } else if !useMockHR {
+                displayMaxHR = await workout.estimatedHRMax()
+            } else {
+                displayMaxHR = 188
+            }
+        }
+    }
+
+    func selectEquipment(_ equipment: WorkoutEquipment) {
+        settings.lastEquipment = equipment
+        WatchSettingsStore.save(settings)
+    }
+
+    private func applySyncedSettings(_ synced: WorkoutSettings) {
+        settings = synced
+        WatchSettingsStore.save(synced)
+        if let custom = synced.customMaxHeartRate { displayMaxHR = Double(custom) }
     }
 
     private func ensureAuthorization() async -> Bool {
@@ -99,8 +133,10 @@ final class WatchN4x4SessionModel {
 
     /// Called by `WKApplicationDelegate` after iPhone uses HealthKit's
     /// `startWatchApp`. Give the pending WCSession checkpoint a short chance to
-    /// arrive; if it does not, begin locally and reconcile when it does.
-    func handleSystemWorkoutStart() async {
+    /// arrive; if it does not, begin locally and reconcile when it does. The
+    /// configuration tells us the phone's equipment choice.
+    func handleSystemWorkoutStart(equipment launchEquipment: WorkoutEquipment) async {
+        if stage != .active { equipment = launchEquipment }
         _ = await ensureAuthorization()
         if stage == .active {
             publishCurrentFrame()
@@ -113,7 +149,7 @@ final class WatchN4x4SessionModel {
             try? await Task.sleep(for: .milliseconds(500))
             guard let self, !Task.isCancelled,
                   self.stage == .idle || self.stage == .done else { return }
-            await self.startPrimary()
+            await self.startPrimary(mode: .n4x4, equipment: launchEquipment)
         }
         systemStartTask = task
         await task.value
@@ -121,19 +157,22 @@ final class WatchN4x4SessionModel {
 
     // MARK: - Watch authority
 
-    func startPrimary() async {
+    func startPrimary(mode: WorkoutMode, equipment requestedEquipment: WorkoutEquipment? = nil) async {
         guard stage == .idle || stage == .done else { return }
         _ = await ensureAuthorization()
         guard stage == .idle || stage == .done else { return }
 
         let startID = UUID()
         pendingStartID = startID
-        let maxHR: Double?
-        if useMockHR {
-            maxHR = 188
+        let estimated: Double?
+        if settings.customMaxHeartRate != nil {
+            estimated = nil
+        } else if useMockHR {
+            estimated = 188
         } else {
-            maxHR = await workout.estimatedHRMax()
+            estimated = await workout.estimatedHRMax()
         }
+        let maxHR = settings.resolvedMaxHeartRate(estimated: estimated)
 
         // A phone checkpoint or stop may have arrived while HealthKit queried.
         guard pendingStartID == startID,
@@ -141,8 +180,15 @@ final class WatchN4x4SessionModel {
         pendingStartID = nil
 
         let now = Date()
+        equipment = requestedEquipment
+            ?? (mode == .heartCheck ? settings.heartCheckWorkload?.equipment : nil)
+            ?? settings.lastEquipment
         beginWatchAuthority(
-            engine: IntervalEngine(hrMax: maxHR, startedAt: now),
+            engine: IntervalEngine(
+                config: settings.program(for: mode, hrMax: maxHR),
+                hrMax: maxHR,
+                startedAt: now
+            ),
             sessionID: UUID(),
             createdAt: now,
             startingSequence: 0
@@ -175,6 +221,7 @@ final class WatchN4x4SessionModel {
         sessionCreatedAt = createdAt
         sequence = startingSequence
         hrMax = engine.hrMax
+        program = engine.config
         receivedAnyHR = false
         latestHR = nil
         heartRateSource = .none
@@ -202,7 +249,10 @@ final class WatchN4x4SessionModel {
             heartRateSessionActive = true
             return true
         }
-        let opened = workout.start { [weak self] bpm, date in
+        let opened = workout.start(
+            equipment: equipment,
+            mode: engine?.config.mode ?? .n4x4
+        ) { [weak self] bpm, date in
             self?.ingest(bpm: bpm, at: date)
         }
         heartRateSessionActive = opened
@@ -210,7 +260,7 @@ final class WatchN4x4SessionModel {
             timerOnlyReason = .sensorFailed
             showTimerOnlyWarning = true
             scheduleSensorRetry()
-        } else if hrMax == nil {
+        } else if hrMax == nil, engine?.config.requiresMaxHeartRate == true {
             timerOnlyReason = .noHRMax
             showTimerOnlyWarning = true
             scheduleHRArrivalCheck()
@@ -232,6 +282,7 @@ final class WatchN4x4SessionModel {
                 if self.beginSensing() {
                     self.sensorRetryTask = nil
                     self.showTimerOnlyWarning = self.hrMax == nil
+                        && self.engine?.config.requiresMaxHeartRate == true
                     self.publishCurrentFrame()
                     return
                 }
@@ -296,6 +347,10 @@ final class WatchN4x4SessionModel {
             return
         }
 
+        if let remoteEquipment = remote.equipment, remote.sessionID != sessionID {
+            equipment = remoteEquipment
+        }
+
         // Preserve all clock/pause/skip/ramp state, but start a clean HR buffer:
         // from this moment the Watch optical sensor is the sole HR authority.
         let restored = IntervalEngine(
@@ -344,8 +399,18 @@ final class WatchN4x4SessionModel {
 
     var canControl: Bool { stage == .active }
 
+    /// True when End would complete and save the session (Hold HR after five
+    /// minutes) rather than discard it.
+    var endCompletesSession: Bool {
+        stage == .active && engine?.endCompletesSession(at: .now) == true
+    }
+
     func end() {
         guard let sessionID else { return }
+        if endCompletesSession {
+            performLocalAction(.finish, broadcastCommand: true)
+            return
+        }
         let command = SessionCommand(sessionID: sessionID, action: .stop)
         stoppedSessionIDs.insert(sessionID)
         trimTerminalHistory()
@@ -371,7 +436,7 @@ final class WatchN4x4SessionModel {
         acknowledge(command.id)
 
         switch command.action {
-        case .setPaused, .skip:
+        case .setPaused, .skip, .finish:
             performLocalAction(
                 command.action,
                 at: command.issuedAt,
@@ -405,6 +470,8 @@ final class WatchN4x4SessionModel {
             if paused { workout.pause() } else { workout.resume() }
         case .skip:
             _ = engine.skip(at: now)
+        case .finish:
+            engine.finish(at: now)
         case .stop, .requestSync:
             return
         }
@@ -415,6 +482,9 @@ final class WatchN4x4SessionModel {
             broadcast(.command(outgoingCommand))
         }
         publish(result.output)
+        if result.output.isFinished, let sessionID {
+            completeSession(sessionID)
+        }
     }
 
     // MARK: - Engine loop / HR
@@ -450,17 +520,22 @@ final class WatchN4x4SessionModel {
             for command in result.haptics { haptics.play(command) }
 
             if result.output.isFinished {
-                stoppedSessionIDs.insert(expectedSessionID)
-                trimTerminalHistory()
-                stopRuntime(
-                    clearOutput: false,
-                    finalStage: .done,
-                    completedSessionID: expectedSessionID
-                )
+                completeSession(expectedSessionID)
                 return
             }
+            workout.observePhase(result.output.phase, label: result.output.phaseLabel, at: now)
             try? await Task.sleep(for: .seconds(1))
         }
+    }
+
+    private func completeSession(_ completedSessionID: UUID) {
+        stoppedSessionIDs.insert(completedSessionID)
+        trimTerminalHistory()
+        stopRuntime(
+            clearOutput: false,
+            finalStage: .done,
+            completedSessionID: completedSessionID
+        )
     }
 
     private func publishCurrentFrame() {
@@ -482,7 +557,8 @@ final class WatchN4x4SessionModel {
             heartRateSessionActive: heartRateSessionActive,
             acknowledgedCommandIDs: acknowledgedCommandIDs,
             output: engineOutput,
-            checkpoint: engine.checkpoint()
+            checkpoint: engine.checkpoint(),
+            equipment: equipment
         )
         currentSnapshot = snapshot
         heartRateSource = snapshot.heartRateSource
@@ -502,7 +578,12 @@ final class WatchN4x4SessionModel {
         pendingStartID = nil
         cancelRuntimeTasks()
         if let completedSessionID {
-            _ = workout.completeWorkout(at: .now, sessionID: completedSessionID)
+            _ = workout.completeWorkout(
+                at: .now,
+                sessionID: completedSessionID,
+                mode: engine?.config.mode ?? .n4x4,
+                equipment: equipment
+            )
         } else {
             workout.teardown()
         }
@@ -556,6 +637,10 @@ final class WatchN4x4SessionModel {
         let desired: Double
         if let target = output?.target {
             desired = (target.lowerBound + target.upperBound) / 2
+        } else if output?.phase == .fixedWorkload {
+            desired = (hrMax ?? 190) * 0.72
+        } else if output?.phase == .stillness {
+            desired = (hrMax ?? 190) * 0.48
         } else {
             desired = (hrMax ?? 190) * 0.55
         }

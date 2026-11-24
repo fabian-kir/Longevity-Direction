@@ -2,7 +2,8 @@ import Foundation
 import IntervalEngine
 import Observation
 
-/// App-lifetime coordinator for one Norwegian 4x4 protocol.
+/// App-lifetime coordinator for one guided session (Norwegian 4x4, Hold HR or
+/// heart check).
 ///
 /// The protocol timeline is never coupled to transport availability. The phone
 /// starts a local engine immediately, asks Apple Watch to assume authority, and
@@ -26,6 +27,46 @@ final class N4x4SessionModel {
     var workoutDetails = N4x4WorkoutDetails()
     var showTimerOnlyWarning = false
     private(set) var timerOnlyReason: TimerOnlyReason = .noReadings
+    /// The routine of the running, mirrored or just-finished session.
+    private(set) var program: ProtocolConfig?
+    /// The routine shown on the idle screen. 4×4 unless the user switches.
+    var selectedMode: WorkoutMode = .n4x4
+    /// What the automatic HRmax is made of, for the settings explanation.
+    private(set) var maxHeartRateEstimate: MaxHeartRateEstimate?
+
+    /// Adjustable workout settings. Defaults reproduce the standard routines;
+    /// every change is stored and pushed to the Watch.
+    var settings: WorkoutSettings {
+        didSet {
+            guard settings != oldValue else { return }
+            Self.saveSettings(settings)
+            connectivity.pushSettings(settings)
+        }
+    }
+
+    /// Automatic HRmax inputs: the age formula and the observed 90-day max.
+    struct MaxHeartRateEstimate: Equatable {
+        let formula: Double?
+        let observedMax: Double?
+        /// The higher of the two, as in ``HRMaxEstimator``.
+        var value: Double? { [formula, observedMax].compactMap { $0 }.max() }
+    }
+
+    /// HRmax the next session will use: the user's own value, else the estimate.
+    var effectiveMaxHeartRate: Double? {
+        settings.resolvedMaxHeartRate(estimated: maxHeartRateEstimate?.value)
+    }
+
+    /// True when End completes and saves the session (Hold HR after five
+    /// minutes) instead of discarding it.
+    var endCompletesSession: Bool {
+        guard isRunning || isMirroring,
+              let threshold = program?.finishesEarlyAfter,
+              let output, !output.isFinished else { return false }
+        return output.elapsed >= threshold
+    }
+
+    let healthLinker = N4x4HealthLinker()
 
     var timerOnlyWarningTitle: String {
         switch timerOnlyReason {
@@ -38,7 +79,7 @@ final class N4x4SessionModel {
     var timerOnlyWarningMessage: String {
         switch timerOnlyReason {
         case .noHRMax:
-            return "Heart rate can still be shown, but no HRmax estimate is available for target-zone coaching. Add a date of birth or recent heart-rate history in Apple Health."
+            return "Heart rate can still be shown, but no HRmax is available for target-zone coaching. Set your max heart rate in workout settings, or add a date of birth or recent heart-rate history in Apple Health."
         case .sensorFailed:
             return "The iPhone could not open a local workout sensor session. The timer and phases continue; reconnect Apple Watch or an external heart-rate source for live guidance."
         case .noReadings:
@@ -81,6 +122,9 @@ final class N4x4SessionModel {
     init(healthKit: HealthKitManager, store: LocalDataStore) {
         self.healthKit = healthKit
         self.recorder = N4x4WorkoutRecorder(context: store.context)
+        let settings = Self.loadSettings()
+        self.settings = settings
+        self.workoutDetails = N4x4WorkoutDetails(equipment: settings.lastEquipment)
         #if DEBUG
         useMockHR = MockMode.isActive
         #endif
@@ -92,6 +136,7 @@ final class N4x4SessionModel {
             self?.handleReachabilityChange(reachable)
         }
         connectivity.activate()
+        connectivity.pushSettings(settings)
 
         // HealthKit workout mirroring is a second, background-capable transport.
         // Both transports may deliver the same payload; sequence/command IDs make
@@ -112,27 +157,57 @@ final class N4x4SessionModel {
 
     func onAppear(dateOfBirth: Date?) {
         self.dateOfBirth = dateOfBirth
+        Task { await refreshMaxHeartRateEstimate() }
     }
 
-    func start(dateOfBirth: Date?) async {
+    /// Leaves the completion screen for the start screen.
+    func dismissCompletion() {
+        guard !isRunning, !isMirroring else { return }
+        output = nil
+        currentSnapshot = nil
+        program = nil
+        recorder.resetLiveFrames()
+        workoutDetails = N4x4WorkoutDetails(equipment: settings.lastEquipment)
+    }
+
+    func refreshMaxHeartRateEstimate() async {
+        let observedMax = try? await healthKit.observedMaxHeartRate(days: 90)
+        maxHeartRateEstimate = MaxHeartRateEstimate(
+            formula: dateOfBirth.map { HRMaxEstimator.tanaka(age: HRMaxEstimator.age(dateOfBirth: $0)) },
+            observedMax: observedMax
+        )
+    }
+
+    func start(mode: WorkoutMode, dateOfBirth: Date?) async {
         guard !isRunning, !isMirroring else { return }
         self.dateOfBirth = dateOfBirth
 
         let startID = UUID()
         pendingStartID = startID
-        let observedMax = try? await healthKit.observedMaxHeartRate(days: 90)
+        let observedMax: Double?
+        if settings.customMaxHeartRate == nil {
+            observedMax = try? await healthKit.observedMaxHeartRate(days: 90)
+        } else {
+            observedMax = nil
+        }
 
         // An incoming Watch workout may have arrived while the query suspended.
         guard pendingStartID == startID, !isRunning, !isMirroring else { return }
         pendingStartID = nil
 
-        let maxHR = HRMaxEstimator.estimate(
+        let maxHR = settings.resolvedMaxHeartRate(estimated: HRMaxEstimator.estimate(
             dateOfBirth: dateOfBirth,
             observedMaxLast90d: observedMax
-        )
+        ))
+        // The heart check's fixed workload shouldn't change the everyday default.
+        if mode != .heartCheck { settings.lastEquipment = workoutDetails.equipment }
         let now = Date()
         beginLocalAuthority(
-            engine: IntervalEngine(hrMax: maxHR, startedAt: now),
+            engine: IntervalEngine(
+                config: settings.program(for: mode, hrMax: maxHR),
+                hrMax: maxHR,
+                startedAt: now
+            ),
             sessionID: UUID(),
             createdAt: now,
             startingSequence: 0,
@@ -162,6 +237,8 @@ final class N4x4SessionModel {
         sessionCreatedAt = createdAt
         sequence = startingSequence
         hrMax = engine.hrMax
+        program = engine.config
+        if engine.config.mode != .heartCheck { selectedMode = engine.config.mode }
         receivedAnyHR = false
         localSensingStarted = false
         heartRateSource = .none
@@ -178,7 +255,9 @@ final class N4x4SessionModel {
             sessionID: sessionID,
             startedAt: createdAt,
             hrMax: engine.hrMax,
-            details: workoutDetails
+            details: workoutDetails,
+            program: engine.config,
+            workloadSummary: settings.heartCheckWorkload?.summary
         )
 
         let result = engine.tick(at: Date())
@@ -205,7 +284,10 @@ final class N4x4SessionModel {
         handoffTask?.cancel()
         handoffTask = Task { [weak self] in
             guard let self else { return }
-            let launched = await self.workout.startWatchApp()
+            let launched = await self.workout.startWatchApp(
+                equipment: self.workoutDetails.equipment,
+                mode: self.program?.mode ?? .n4x4
+            )
             guard !Task.isCancelled,
                   self.isRunning,
                   self.sessionID == expectedSessionID else { return }
@@ -226,7 +308,10 @@ final class N4x4SessionModel {
         guard isRunning, !localSensingStarted, !useMockHR else { return }
         localSensingStarted = true
 
-        let opened = workout.startLocal { [weak self] bpm, date in
+        let opened = workout.startLocal(
+            equipment: workoutDetails.equipment,
+            mode: program?.mode ?? .n4x4
+        ) { [weak self] bpm, date in
             self?.ingest(bpm: bpm, at: date)
         }
         if !opened {
@@ -237,7 +322,7 @@ final class N4x4SessionModel {
             return
         }
 
-        if hrMax == nil {
+        if hrMax == nil, program?.requiresMaxHeartRate == true {
             timerOnlyReason = .noHRMax
             showTimerOnlyWarning = true
         }
@@ -356,9 +441,11 @@ final class N4x4SessionModel {
 
         let wasFollowingThisSession = isMirroring && sessionID == remote.sessionID
         if sessionID != remote.sessionID {
-            // A standalone Watch run has no phone-side equipment selection.
-            // Do not accidentally reuse details from the previous phone run.
-            workoutDetails = N4x4WorkoutDetails()
+            // A standalone Watch run carries its own equipment choice. Do not
+            // accidentally reuse details from the previous phone run.
+            workoutDetails = N4x4WorkoutDetails(equipment: remote.equipment ?? .unspecified)
+        } else if let equipment = remote.equipment, equipment != .unspecified {
+            workoutDetails.equipment = equipment
         }
 
         if sessionID != remote.sessionID {
@@ -385,6 +472,8 @@ final class N4x4SessionModel {
         sessionCreatedAt = remote.createdAt
         sequence = remote.sequence
         hrMax = remote.checkpoint.hrMax
+        program = remote.checkpoint.config ?? .norwegian4x4
+        if let mode = program?.mode, mode != .heartCheck { selectedMode = mode }
         heartRateSource = remote.heartRateSource
         output = remote.output
         currentSnapshot = remote
@@ -396,11 +485,13 @@ final class N4x4SessionModel {
             sessionID: remote.sessionID,
             startedAt: remote.createdAt,
             hrMax: remote.checkpoint.hrMax,
-            details: workoutDetails
+            details: workoutDetails,
+            program: program ?? .norwegian4x4,
+            workloadSummary: settings.heartCheckWorkload?.summary
         )
 
         if !remote.output.isFinished {
-            if hrMax == nil {
+            if hrMax == nil, program?.requiresMaxHeartRate == true {
                 timerOnlyReason = .noHRMax
                 showTimerOnlyWarning = true
             } else if remote.output.trailingHR != nil || !wasFollowingThisSession {
@@ -417,6 +508,9 @@ final class N4x4SessionModel {
                 completed: true,
                 healthKitRequested: remote.heartRateSessionActive
             )
+            if remote.heartRateSessionActive, let log = recorder.log(for: remote.sessionID) {
+                healthLinker.refreshSoon(log)
+            }
             stoppedSessionIDs.insert(remote.sessionID)
             trimTerminalHistory()
             watchdog?.cancel(); watchdog = nil
@@ -543,6 +637,10 @@ final class N4x4SessionModel {
 
     func end() {
         guard let sessionID else { return }
+        if endCompletesSession {
+            performUserAction(.finish)
+            return
+        }
         let shouldEndMirroredWorkout = isMirroring
         let command = SessionCommand(sessionID: sessionID, action: .stop)
         stoppedSessionIDs.insert(sessionID)
@@ -589,6 +687,8 @@ final class N4x4SessionModel {
             if isRunning { applyLocally(.setPaused(paused), at: command.issuedAt) }
         case .skip:
             if isRunning { applyLocally(.skip, at: command.issuedAt) }
+        case .finish:
+            if isRunning { applyLocally(.finish, at: command.issuedAt) }
         case .requestSync:
             if isRunning, let currentSnapshot { broadcast(.snapshot(currentSnapshot)) }
         case .stop:
@@ -603,12 +703,15 @@ final class N4x4SessionModel {
             engine.setPaused(paused, at: now)
         case .skip:
             _ = engine.skip(at: now)
+        case .finish:
+            engine.finish(at: now)
         case .stop, .requestSync:
             return
         }
         let result = engine.tick(at: now)
         output = result.output
         publish(result.output)
+        if result.output.isFinished { finishLocalSession() }
     }
 
     private func sendCommand(_ action: SessionCommand.Action) {
@@ -650,6 +753,7 @@ final class N4x4SessionModel {
                 finishLocalSession()
                 return
             }
+            workout.observePhase(result.output.phase, label: result.output.phaseLabel, at: now)
             try? await Task.sleep(for: .seconds(1))
         }
     }
@@ -666,7 +770,8 @@ final class N4x4SessionModel {
             heartRateSessionActive: localSensingStarted || useMockHR,
             acknowledgedCommandIDs: acknowledgedCommandIDs,
             output: engineOutput,
-            checkpoint: engine.checkpoint()
+            checkpoint: engine.checkpoint(),
+            equipment: workoutDetails.equipment
         )
         currentSnapshot = snapshot
         heartRateSource = snapshot.heartRateSource
@@ -675,7 +780,9 @@ final class N4x4SessionModel {
             sessionID: sessionID,
             startedAt: createdAt,
             hrMax: engine.hrMax,
-            details: workoutDetails
+            details: workoutDetails,
+            program: engine.config,
+            workloadSummary: settings.heartCheckWorkload?.summary
         )
         broadcast(.snapshot(snapshot))
         Task { await liveActivity.reconcile(snapshot) }
@@ -696,9 +803,14 @@ final class N4x4SessionModel {
             let requested = workout.completeLocalWorkout(
                 at: .now,
                 sessionID: sessionID,
-                indoor: workoutDetails.equipment.isIndoor
+                mode: program?.mode ?? .n4x4,
+                equipment: workoutDetails.equipment
             ) { [weak self] error in
-                self?.recorder.updateHealthKitResult(sessionID: sessionID, error: error)
+                guard let self else { return }
+                self.recorder.updateHealthKitResult(sessionID: sessionID, error: error)
+                if error == nil, let log = self.recorder.log(for: sessionID) {
+                    self.healthLinker.refreshSoon(log)
+                }
             }
             recorder.finish(
                 output: output,
@@ -768,10 +880,31 @@ final class N4x4SessionModel {
         let desired: Double
         if let target = output?.target {
             desired = (target.lowerBound + target.upperBound) / 2
+        } else if output?.phase == .fixedWorkload {
+            desired = (hrMax ?? 190) * 0.72
+        } else if output?.phase == .stillness {
+            desired = (hrMax ?? 190) * 0.48
         } else {
             desired = (hrMax ?? 190) * 0.55
         }
         mockHR += (desired - mockHR) * 0.22 + Double.random(in: -2...2)
         return mockHR
+    }
+
+    // MARK: - Settings persistence
+
+    private static let settingsKey = "workout.settings"
+
+    private static func loadSettings() -> WorkoutSettings {
+        guard let data = UserDefaults.standard.data(forKey: settingsKey),
+              let settings = try? JSONDecoder().decode(WorkoutSettings.self, from: data) else {
+            return WorkoutSettings()
+        }
+        return settings
+    }
+
+    private static func saveSettings(_ settings: WorkoutSettings) {
+        guard let data = try? JSONEncoder().encode(settings) else { return }
+        UserDefaults.standard.set(data, forKey: settingsKey)
     }
 }

@@ -2,8 +2,9 @@ import Foundation
 
 /// Transport-safe continuation state for ``IntervalEngine``.
 ///
-/// The protocol configuration is deliberately supplied separately when the
-/// engine is restored. Everything mutable at runtime is represented here.
+/// Carries the protocol configuration alongside everything mutable at runtime,
+/// so the receiving device continues the same routine. `config` is optional
+/// only so checkpoints from before configurable protocols still decode.
 public struct EngineCheckpoint: Equatable, Sendable, Codable {
     public struct HeartRateSample: Equatable, Sendable, Codable {
         public let timestamp: Date
@@ -35,6 +36,8 @@ public struct EngineCheckpoint: Equatable, Sendable, Codable {
     public let phaseStartHR: Double?
     public let lastGuidance: Guidance?
     public let isFinished: Bool
+    public let config: ProtocolConfig?
+    public let finishedElapsed: TimeInterval?
 
     public init(
         hrMax: Double?,
@@ -46,7 +49,9 @@ public struct EngineCheckpoint: Equatable, Sendable, Codable {
         lastPhaseKind: PhaseKind?,
         phaseStartHR: Double?,
         lastGuidance: Guidance?,
-        isFinished: Bool
+        isFinished: Bool,
+        config: ProtocolConfig? = nil,
+        finishedElapsed: TimeInterval? = nil
     ) {
         self.hrMax = hrMax
         self.startedAt = startedAt
@@ -58,5 +63,7 @@ public struct EngineCheckpoint: Equatable, Sendable, Codable {
         self.phaseStartHR = phaseStartHR
         self.lastGuidance = lastGuidance
         self.isFinished = isFinished
+        self.config = config
+        self.finishedElapsed = finishedElapsed
     }
 }

@@ -356,6 +356,9 @@ private extension N4x4ActivityAttributes.ContentState {
         if normalized.contains("high") { return "bolt.fill" }
         if normalized.contains("recovery") { return "wind" }
         if normalized.contains("cool") { return "snowflake" }
+        if normalized.contains("stand still") { return "figure.stand" }
+        if normalized.hasPrefix("hold") && normalized.contains("bpm") { return "heart.fill" }
+        if ringColor == .amber { return "speedometer" }
         return "flame.fill"
     }
 }
@@ -366,6 +369,7 @@ private extension RingColor {
         case .blue: return .cyan
         case .red: return .red
         case .green: return .green
+        case .amber: return .orange
         @unknown default: return .cyan
         }
     }

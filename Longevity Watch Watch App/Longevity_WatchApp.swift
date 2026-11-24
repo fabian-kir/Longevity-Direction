@@ -6,6 +6,7 @@
 //
 
 import HealthKit
+import IntervalEngine
 import SwiftUI
 import WatchKit
 
@@ -14,8 +15,9 @@ final class WatchAppDelegate: NSObject, WKApplicationDelegate {
     /// Watch. The app-lifetime model either adopts the phone's pending checkpoint
     /// or starts immediately and reconciles as soon as that checkpoint arrives.
     func handle(_ workoutConfiguration: HKWorkoutConfiguration) {
+        let equipment = WorkoutEquipment(configuration: workoutConfiguration)
         Task { @MainActor in
-            await WatchN4x4SessionModel.shared.handleSystemWorkoutStart()
+            await WatchN4x4SessionModel.shared.handleSystemWorkoutStart(equipment: equipment)
         }
     }
 }

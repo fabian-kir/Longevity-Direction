@@ -69,11 +69,16 @@ Manual bloodwork panel entry and tracking.
 
 ## N4x4 tab + Watch companion
 
-Guided Norwegian 4×4 interval training on iPhone and Apple Watch.
+Guided heart-rate training on iPhone and Apple Watch. Apple Health stays the source of measured values (distance, calories, route); the app adds live coaching on top.
 
-- **31-minute protocol** — warm-up, four high-intensity rounds, three active recoveries and cooldown.
-- **Live coaching** — HRmax-based target bands, trailing-HR guidance and distinct haptic cues.
-- **Phone/Watch mirroring** — one device owns the session while the other mirrors; a watchdog promotes the mirror if the primary disappears.
+- **Norwegian 4×4** — default 31-minute protocol: warm-up, four high-intensity rounds, three active recoveries and cooldown. Starts exactly as before; no setup required.
+- **Hold heart rate** — hold one target heart rate for a set time (default: 70% of max HR, ±5 bpm, 30 min after a 5-min warm-up). Watch haptics cue when drifting high or low; Finish after 5 minutes saves the session.
+- **Heart check** — monthly 11-minute routine at a fixed, repeatable workload: 3 min easy, 6 min at the workload, 2 min standing still. Results: heart rate at the workload (aerobic fitness) and the drop after 1 and 2 minutes (recovery). Compared only with earlier checks at the same workload; "due" card on the start screen and a trend view.
+- **Workout settings** — own max heart rate (or the explained automatic estimate), 4×4 structure, zones and tolerance, Hold-HR target, tolerance and duration. Synced to the Watch.
+- **Live coaching** — target bands, trailing-HR guidance and distinct haptic cues; clear Liquid Glass metrics card.
+- **Apple Health workouts** — equipment maps to the matching Apple workout type (treadmill run/walk, indoor cycle/row, elliptical, stair stepper, outdoor run/walk/cycle) so Health records distance, pace and running metrics; outdoor sessions record a GPS route; each phase is saved as a workout segment.
+- **After the workout** — effort rating (saved as Apple's workout effort score), machine distance and treadmill incline corrections (app only; Health keeps the Watch's measurement), notes. Workout details show Apple's measured distance, pace and active calories.
+- **Phone/Watch mirroring** — one device owns the session while the other mirrors; a watchdog promotes the mirror if the primary disappears. The running routine travels with every checkpoint.
 - **Timer-only degradation** — explicit warnings when HR or target zones are unavailable, with automatic recovery when readings resume.
 - **Mock launch mode** — shared `-mockData` contract for simulator demos without HealthKit sensors.
 
