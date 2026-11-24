@@ -10,6 +10,8 @@ struct PendingMealsSheet: View {
 
     private var queue: PendingMealQueue { services.pendingMeals }
 
+    @State private var consentRequest: AIConsentRequest?
+
     var body: some View {
         NavigationStack {
             List {
@@ -34,10 +36,17 @@ struct PendingMealsSheet: View {
                     Button("Done") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Retry") {
-                        Task { await queue.retryAll() }
+                    if queue.isAISharingAllowed {
+                        Button("Retry") {
+                            Task { await queue.retryAll() }
+                        }
+                        .disabled(!queue.isOnline || queue.isProcessing)
+                    } else {
+                        // Allowing starts the queue on its own.
+                        Button("Allow AI") {
+                            consentRequest = AIConsentRequest()
+                        }
                     }
-                    .disabled(!queue.isOnline || queue.isProcessing)
                 }
             }
             // Everything analysed or discarded: nothing left to show.
@@ -46,9 +55,13 @@ struct PendingMealsSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .aiConsentSheet($consentRequest)
     }
 
     private var footer: String {
+        if !queue.isAISharingAllowed {
+            return "Sharing with AI is off, so these photos stay on this iPhone and aren’t analysed. Allow it to analyse them, or swipe left to discard a photo."
+        }
         if !queue.isOnline {
             return "You’re offline. These photos are analysed and logged automatically when you’re back online."
         }
@@ -103,6 +116,8 @@ private struct PendingMealRow: View {
     private var status: some View {
         if queue.processingID == meal.id {
             Text("Analysing…")
+        } else if !queue.isAISharingAllowed {
+            Text("Waiting for sharing with AI")
         } else if !queue.isOnline {
             Text("Waiting for network")
         } else if let error = meal.lastError {

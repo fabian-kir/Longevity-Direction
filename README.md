@@ -11,6 +11,7 @@ tracking and the nutrition log.
 [![CI](https://github.com/fabian-kir/Longevity-Direction/actions/workflows/ci.yml/badge.svg)](https://github.com/fabian-kir/Longevity-Direction/actions/workflows/ci.yml)
 ![Platform](https://img.shields.io/badge/platform-iOS%2026%20%7C%20watchOS%2026-blue)
 ![Swift](https://img.shields.io/badge/Swift-SwiftUI%20%2B%20SwiftData-orange)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 > Longevity Direction is a personal learning project. It is not a medical device and gives no medical advice.
 > The biological-age figure is a proxy built from wearable and lab values, not a diagnosis.
@@ -204,6 +205,11 @@ Health data comes from HealthKit. Photo logging needs an OpenRouter API key, ent
 ## Scope
 
 The feature list and what is deliberately left out are in [docs/scope.md](docs/scope.md).
+
+## License
+
+MIT, see [LICENSE](LICENSE). Food data from Open Food Facts is © Open Food Facts contributors,
+licensed under the ODbL.
 
 ---
 

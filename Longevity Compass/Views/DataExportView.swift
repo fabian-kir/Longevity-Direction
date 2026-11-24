@@ -11,6 +11,7 @@ struct DataExportView: View {
 
     @State private var apiKeyInput: String = ""
     @State private var apiSaved: Bool = false
+    @State private var aiConsentRequest: AIConsentRequest?
 
     @State private var scheduled: [NotificationManager.ScheduledNotification] = []
     @State private var scheduledLoaded = false
@@ -21,7 +22,7 @@ struct DataExportView: View {
     var body: some View {
         Form {
             Section("Privacy") {
-                Text("All data stays on this iPhone. No cloud sync. No analytics. No account.")
+                Text("Your data stays on this iPhone. No cloud sync. No analytics. No account. AI features send meal photos and exercise names to OpenRouter, only if you allow it (see below).")
                     .font(.subheadline)
             }
 
@@ -66,6 +67,9 @@ struct DataExportView: View {
                         services.openRouter.setAPIKey(apiKeyInput)
                         apiKeyInput = ""
                         apiSaved = true
+                        if !services.openRouter.consent.isGranted {
+                            aiConsentRequest = AIConsentRequest()
+                        }
                     } label: { Text("Save key") }
                     .buttonStyle(.borderedProminent)
                     .disabled(apiKeyInput.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -79,6 +83,24 @@ struct DataExportView: View {
                 }
                 LabeledContent("Model") {
                     Text("\(Image(systemName: "wand.and.stars")) \(HealthThresholds.OpenRouter.autoModelDisplayName)")
+                }
+
+                LabeledContent("Sharing with AI") {
+                    Text(aiSharingLabel)
+                        .foregroundStyle(aiSharingColor)
+                }
+                Button {
+                    aiConsentRequest = AIConsentRequest()
+                } label: {
+                    Label(services.openRouter.consent.isGranted ? "What gets shared" : "Allow sharing with AI…",
+                          systemImage: "sparkles")
+                }
+                if services.openRouter.consent.isGranted {
+                    Button(role: .destructive) {
+                        services.stopAISharing()
+                    } label: {
+                        Label("Stop sharing with AI", systemImage: "hand.raised")
+                    }
                 }
 
                 if let digest = services.nutritionDigest {
@@ -113,7 +135,7 @@ struct DataExportView: View {
                     }
                 }
 
-                Text("Get a key at openrouter.ai → top right → Keys → Create. All AI features (meal photos, muscle tagging, exercise icons) run in OpenRouter's Auto mode (\(HealthThresholds.OpenRouter.autoModel)): OpenRouter picks the model for each request, so newer models are used automatically. Costs shown are what OpenRouter actually charged.")
+                Text("Get a key at openrouter.ai → top right → Keys → Create. All AI features (meal photos, muscle tagging, exercise icons) run in OpenRouter's Auto mode (\(HealthThresholds.OpenRouter.autoModel)): OpenRouter picks the model for each request, so newer models are used automatically. Costs shown are what OpenRouter actually charged. Nothing is sent until you allow sharing with AI.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 if let err = services.openRouter.lastError {
@@ -249,6 +271,7 @@ struct DataExportView: View {
         }
         .navigationTitle("Settings")
         .task { await reloadScheduled() }
+        .aiConsentSheet($aiConsentRequest)
         .sheet(isPresented: $showDigestionOnboarding) {
             DigestionOnboardingView { services.startDigestionTracking() }
         }
@@ -271,6 +294,20 @@ struct DataExportView: View {
         } message: { e in
             Text(e)
         }
+    }
+
+    private var aiSharingLabel: String {
+        let consent = services.openRouter.consent
+        if consent.isGranted { return "Allowed" }
+        if consent.needsRenewal { return "Needs your OK again" }
+        return "Off"
+    }
+
+    private var aiSharingColor: Color {
+        let consent = services.openRouter.consent
+        if consent.isGranted { return .green }
+        if consent.needsRenewal { return .orange }
+        return .secondary
     }
 
     private func reloadScheduled() async {

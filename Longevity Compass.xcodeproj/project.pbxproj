@@ -435,11 +435,11 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Longevity Compass/Info.plist";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Longevity Direction uses the camera to scan barcodes on packaged foods and to photograph meals for nutrition estimation.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Longevity Direction uses the camera to scan barcodes on packaged foods and to photograph meals. Meal photos are sent to the AI provider set up in Settings for nutrition estimation. Barcode scans stay on the device.";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Longevity Direction reads your Apple Health data on this device so it can show what most needs your attention. Nothing leaves your iPhone.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Longevity Direction writes blood-pressure readings and your guided workouts, routes and effort ratings to Apple Health so Health remains the single source of truth.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Longevity Direction records the GPS route of outdoor workouts and saves it with the workout in Apple Health.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Longevity Direction uses photos of meals to estimate nutrition. Photos are sent to the AI provider you configured in the Data tab.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Longevity Direction uses photos of meals to estimate nutrition. Photos are sent to the AI provider set up in Settings.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -475,11 +475,11 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Longevity Compass/Info.plist";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Longevity Direction uses the camera to scan barcodes on packaged foods and to photograph meals for nutrition estimation.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Longevity Direction uses the camera to scan barcodes on packaged foods and to photograph meals. Meal photos are sent to the AI provider set up in Settings for nutrition estimation. Barcode scans stay on the device.";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Longevity Direction reads your Apple Health data on this device so it can show what most needs your attention. Nothing leaves your iPhone.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Longevity Direction writes blood-pressure readings and your guided workouts, routes and effort ratings to Apple Health so Health remains the single source of truth.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Longevity Direction records the GPS route of outdoor workouts and saves it with the workout in Apple Health.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Longevity Direction uses photos of meals to estimate nutrition. Photos are sent to the AI provider you configured in the Data tab.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Longevity Direction uses photos of meals to estimate nutrition. Photos are sent to the AI provider set up in Settings.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

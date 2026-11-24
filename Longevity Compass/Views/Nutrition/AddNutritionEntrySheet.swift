@@ -14,11 +14,15 @@ struct PostCaptureSheet: View {
     enum Outcome {
         case saved(title: String)
         case queued
+        /// Kept in the pending queue until the user allows sharing with AI.
+        case heldForAISharing
         case cancelled
         case failed(String)
     }
 
     private enum Phase {
+        /// The user hasn't allowed sending the photo to the AI provider.
+        case needsAISharing
         case analyzing
         case aiFingerprint(MealFingerprintAnalysis)
         case offline(String)
@@ -28,6 +32,7 @@ struct PostCaptureSheet: View {
     @State private var phase: Phase = .analyzing
     @State private var mealWeightGrams: Double = 350
     @State private var isSaving = false
+    @State private var consentRequest: AIConsentRequest?
 
     var body: some View {
         NavigationStack {
@@ -43,11 +48,13 @@ struct PostCaptureSheet: View {
                     }
                 }
         }
-        .task { await analyze() }
+        .task { await start() }
+        .aiConsentSheet($consentRequest)
     }
 
     private var title: String {
         switch phase {
+        case .needsAISharing:   "Photo estimate"
         case .analyzing:        "Analysing meal…"
         case .aiFingerprint:    "Confirm meal"
         case .offline:          "Saved for later"
@@ -60,6 +67,8 @@ struct PostCaptureSheet: View {
     @ViewBuilder
     private var content: some View {
         switch phase {
+        case .needsAISharing:
+            needsAISharingView
         case .analyzing:
             analyzingView
         case .aiFingerprint(let analysis):
@@ -90,6 +99,27 @@ struct PostCaptureSheet: View {
         }
         .padding(.top, 12)
         .frame(maxWidth: .infinity)
+    }
+
+    private var needsAISharingView: some View {
+        ContentUnavailableView {
+            Label("Photo estimates are off", systemImage: "sparkles")
+        } description: {
+            Text("Estimating a meal from a photo needs sharing with AI turned on. You can still scan a barcode or search for a food.")
+        } actions: {
+            VStack(spacing: 10) {
+                Button("Turn on sharing with AI") {
+                    askForAISharing()
+                }
+                .buttonStyle(.glassProminent)
+                Button("Keep photo for later") {
+                    services.pendingMeals.enqueue(image: image, capturedAt: capturedAt)
+                    onFinish(.heldForAISharing)
+                    dismiss()
+                }
+                .buttonStyle(.glass)
+            }
+        }
     }
 
     private func offlineView(message: String) -> some View {
@@ -234,6 +264,27 @@ struct PostCaptureSheet: View {
 
     // MARK: - Pipeline
 
+    /// Asks for AI sharing first when there's a key but no permission yet.
+    /// Without a key, `analyze` fails with the usual "add a key" message.
+    private func start() async {
+        if services.openRouter.hasAPIKey && !services.openRouter.consent.isGranted {
+            phase = .needsAISharing
+            // Let this sheet finish sliding in before stacking another on it.
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled else { return }
+            askForAISharing()
+        } else {
+            await analyze()
+        }
+    }
+
+    private func askForAISharing() {
+        // "Not now" leaves the sheet on the photo-estimates-are-off view.
+        consentRequest = AIConsentRequest(onAllow: {
+            Task { await analyze() }
+        })
+    }
+
     private func analyze() async {
         phase = .analyzing
         do {
@@ -241,13 +292,24 @@ struct PostCaptureSheet: View {
             phase = .aiFingerprint(analysis)
             mealWeightGrams = analysis.fingerprint.typicalServingGrams ?? 350
         } catch {
-            if isNetworkRelated(error) {
+            if isConsentRequired(error) {
+                phase = .needsAISharing
+            } else if isNetworkRelated(error) {
                 services.pendingMeals.enqueue(image: image, capturedAt: capturedAt)
                 phase = .offline("No network — we’ll analyse this when you’re back online.")
             } else {
                 phase = .failed(error.localizedDescription)
             }
         }
+    }
+
+    private func isConsentRequired(_ error: Error) -> Bool {
+        if case OpenRouterError.consentRequired? = error as? OpenRouterError { return true }
+        if case MealAnalysisError.noUsableResult(let underlying)? = error as? MealAnalysisError,
+           case OpenRouterError.consentRequired? = underlying as? OpenRouterError {
+            return true
+        }
+        return false
     }
 
     private func isNetworkRelated(_ error: Error) -> Bool {

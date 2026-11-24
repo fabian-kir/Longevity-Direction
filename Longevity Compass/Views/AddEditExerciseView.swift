@@ -26,6 +26,13 @@ struct AddEditExerciseView: View {
     @State private var generationError: String?
     @FocusState private var nameFocused: Bool
 
+    @State private var consentRequest: AIConsentRequest?
+    /// "Not now" in this sheet: don't ask again on blur or save.
+    @State private var declinedAISharing = false
+    /// Save was tapped while the consent sheet was up or about to show:
+    /// save once the user has answered, whatever the answer.
+    @State private var saveAfterConsent = false
+
     init(existing: ExerciseDef? = nil) {
         self.existing = existing
         _name = State(initialValue: existing?.name ?? "")
@@ -78,6 +85,7 @@ struct AddEditExerciseView: View {
         .onChange(of: nameFocused) { _, focused in
             if !focused { triggerAutoGenIfNeeded() }
         }
+        .aiConsentSheet($consentRequest)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
@@ -127,7 +135,11 @@ struct AddEditExerciseView: View {
 
             if !isGenerating && services.openRouter.hasAPIKey && !name.trimmingCharacters(in: .whitespaces).isEmpty {
                 Button {
-                    Task { await generate() }
+                    // An explicit tap asks again, even after "Not now".
+                    withAISharing(askAgain: true) {
+                        Task { await generate() }
+                        Task { await classifyMusclesIfNeeded() }
+                    }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                         .font(.caption.weight(.bold))
@@ -164,7 +176,9 @@ struct AddEditExerciseView: View {
 
     private var muscleEmptyHint: String {
         if !services.openRouter.hasAPIKey {
-            "Add an OpenRouter API key in the Data tab to auto-detect muscle groups."
+            "Add an OpenRouter API key in Settings to auto-detect muscle groups."
+        } else if !isAISharingAllowed {
+            "Sharing with AI is off, so muscle groups aren't detected."
         } else if name.trimmingCharacters(in: .whitespaces).isEmpty {
             "Enter a name — muscle groups are detected automatically."
         } else {
@@ -182,7 +196,10 @@ struct AddEditExerciseView: View {
             Text("Tap the arrow to try a different version.")
                 .font(.caption).foregroundStyle(.secondary)
         } else if !services.openRouter.hasAPIKey {
-            Text("Add an OpenRouter API key in the Data tab to auto-generate icons. Saves without an icon for now.")
+            Text("Add an OpenRouter API key in Settings to auto-generate icons. Saves without an icon for now.")
+                .font(.caption).foregroundStyle(.secondary)
+        } else if !isAISharingAllowed && !name.trimmingCharacters(in: .whitespaces).isEmpty {
+            Text("Sharing with AI is off, so no icon is generated. Tap the arrow to turn it on.")
                 .font(.caption).foregroundStyle(.secondary)
         } else if name.trimmingCharacters(in: .whitespaces).isEmpty {
             Text("Enter a name — an icon will be generated automatically.")
@@ -195,6 +212,28 @@ struct AddEditExerciseView: View {
 
     // MARK: - Generation
 
+    private var isAISharingAllowed: Bool { services.openRouter.consent.isGranted }
+
+    /// Runs `action` when the user has allowed sharing exercise names with AI.
+    /// Otherwise shows the consent sheet once and runs it only on "Allow".
+    private func withAISharing(askAgain: Bool = false, _ action: @escaping () -> Void) {
+        if isAISharingAllowed {
+            action()
+            return
+        }
+        guard askAgain || !declinedAISharing, consentRequest == nil else { return }
+        consentRequest = AIConsentRequest(
+            onAllow: {
+                // Saving generates the icon and muscle groups itself.
+                if saveAfterConsent { Task { await saveTapped() } } else { action() }
+            },
+            onNotNow: {
+                declinedAISharing = true
+                if saveAfterConsent { Task { await saveTapped() } }
+            }
+        )
+    }
+
     private func triggerAutoGenIfNeeded() {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty,
@@ -202,8 +241,10 @@ struct AddEditExerciseView: View {
               !isGenerating,
               photoData == nil   // only auto-fire when there's no image yet; regenerate is explicit
         else { return }
-        Task { await generate() }
-        Task { await classifyMusclesIfNeeded() }
+        withAISharing {
+            Task { await generate() }
+            Task { await classifyMusclesIfNeeded() }
+        }
     }
 
     /// One-shot muscle classification. Cheap text call, runs alongside image
@@ -212,6 +253,7 @@ struct AddEditExerciseView: View {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty,
               services.openRouter.hasAPIKey,
+              isAISharingAllowed,
               !isClassifying,
               primaryMuscles.isEmpty
         else { return }
@@ -249,7 +291,16 @@ struct AddEditExerciseView: View {
     // MARK: - Save
 
     private func saveTapped() async {
-        if photoData == nil, generationError == nil, services.openRouter.hasAPIKey {
+        let wantsAI = photoData == nil || primaryMuscles.isEmpty
+        if wantsAI, services.openRouter.hasAPIKey, !isAISharingAllowed, !declinedAISharing {
+            // Ask first (or let the sheet the name field opened answer for us),
+            // then save either way.
+            saveAfterConsent = true
+            withAISharing {}
+            return
+        }
+        saveAfterConsent = false
+        if photoData == nil, generationError == nil, services.openRouter.hasAPIKey, isAISharingAllowed {
             await generate()
         }
         await classifyMusclesIfNeeded()

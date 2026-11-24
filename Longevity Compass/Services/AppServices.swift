@@ -193,6 +193,20 @@ final class AppServices {
         await refreshAfterEdit()
     }
 
+    // MARK: - AI data sharing
+
+    /// Records the user's permission to send meal photos and exercise names to
+    /// OpenRouter, then analyses any meal photos that were waiting for it.
+    func allowAISharing() {
+        openRouter.consent.grant()
+        Task { await pendingMeals.processQueue() }
+    }
+
+    /// Stops all OpenRouter requests. Queued meal photos stay on the device.
+    func stopAISharing() {
+        openRouter.consent.withdraw()
+    }
+
     // MARK: - Digestion Insights
 
     func startDigestionTracking(at start: Date = .now) {

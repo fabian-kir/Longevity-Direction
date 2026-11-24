@@ -488,13 +488,18 @@ struct NutritionTabView: View {
         .buttonStyle(.plain)
     }
 
+    private var pendingBadgeIcon: String {
+        if !services.pendingMeals.isAISharingAllowed { return "pause.circle" }
+        return services.pendingMeals.isOnline ? "icloud.and.arrow.up" : "wifi.slash"
+    }
+
     private var pendingBadge: some View {
         Button {
             services.mealCapture.suspendBarcodeDetection()
             showPendingMeals = true
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: services.pendingMeals.isOnline ? "icloud.and.arrow.up" : "wifi.slash")
+                Image(systemName: pendingBadgeIcon)
                 Text("\(services.pendingMeals.pending.count) pending")
                 Image(systemName: "chevron.right")
                     .font(.caption2.weight(.bold))
@@ -770,6 +775,7 @@ struct NutritionTabView: View {
         switch outcome {
         case .saved(let title):       flash("Logged \(title)")
         case .queued:                 flash("Saved — will analyse when online")
+        case .heldForAISharing:       flash("Photo kept for later")
         case .cancelled, .failed:     break
         }
     }

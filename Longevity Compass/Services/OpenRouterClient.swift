@@ -27,6 +27,7 @@ struct ExerciseMuscleClassification {
 
 enum OpenRouterError: LocalizedError {
     case missingAPIKey
+    case consentRequired
     case http(Int, String)
     case malformedResponse(String)
     case noContent
@@ -34,7 +35,9 @@ enum OpenRouterError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingAPIKey:
-            return "OpenRouter API key not set. Add it in the Data tab."
+            return "OpenRouter API key not set. Add it in Settings."
+        case .consentRequired:
+            return "Sharing with AI is off. Allow it in Settings to use AI features."
         case .http(let code, let body):
             return "OpenRouter \(code): \(body)"
         case .malformedResponse(let m):
@@ -49,7 +52,23 @@ enum OpenRouterError: LocalizedError {
 final class OpenRouterClient {
     var lastError: String?
 
-    var hasAPIKey: Bool { Keychain.get(.openRouterAPIKey)?.isEmpty == false }
+    /// The user's permission to send data to OpenRouter. Every request checks it.
+    let consent: AIDataConsent
+
+    @ObservationIgnored private let session: URLSession
+    @ObservationIgnored private let apiKeyProvider: () -> String?
+
+    init(
+        consent: AIDataConsent = .shared,
+        session: URLSession = .shared,
+        apiKeyProvider: @escaping () -> String? = { Keychain.get(.openRouterAPIKey) }
+    ) {
+        self.consent = consent
+        self.session = session
+        self.apiKeyProvider = apiKeyProvider
+    }
+
+    var hasAPIKey: Bool { apiKeyProvider()?.isEmpty == false }
     /// Always OpenRouter's Auto Router — it picks the model per request.
     let model = HealthThresholds.OpenRouter.autoModel
 
@@ -62,13 +81,76 @@ final class OpenRouterClient {
         }
     }
 
+    // MARK: - Request
+
+    private struct ChatResponse {
+        let message: [String: Any]
+        let model: String
+        let inputTokens: Int
+        let outputTokens: Int
+        let costUSD: Double
+    }
+
+    /// The only place that talks to OpenRouter. Refuses to send anything
+    /// without an API key or without the user's AI-sharing consent.
+    private func complete(_ body: [String: Any]) async throws -> ChatResponse {
+        guard let key = apiKeyProvider(), !key.isEmpty else {
+            throw OpenRouterError.missingAPIKey
+        }
+        guard consent.isGranted else {
+            throw OpenRouterError.consentRequired
+        }
+
+        var request = URLRequest(url: HealthThresholds.OpenRouter.endpoint)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(key)",                         forHTTPHeaderField: "Authorization")
+        request.setValue("application/json",                       forHTTPHeaderField: "Content-Type")
+        request.setValue(HealthThresholds.OpenRouter.httpReferer,  forHTTPHeaderField: "HTTP-Referer")
+        request.setValue(HealthThresholds.OpenRouter.appTitle,     forHTTPHeaderField: "X-Title")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw OpenRouterError.malformedResponse("No HTTPURLResponse")
+        }
+        if !(200...299).contains(http.statusCode) {
+            let bodyText = String(data: data, encoding: .utf8) ?? ""
+            throw OpenRouterError.http(http.statusCode, bodyText)
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw OpenRouterError.malformedResponse("Top-level JSON")
+        }
+        let usage = json["usage"] as? [String: Any] ?? [:]
+
+        guard
+            let choices = json["choices"] as? [[String: Any]],
+            let first = choices.first,
+            let message = first["message"] as? [String: Any]
+        else {
+            throw OpenRouterError.malformedResponse("choices/message")
+        }
+
+        return ChatResponse(
+            message: message,
+            model: (json["model"] as? String) ?? model,
+            inputTokens: (usage["prompt_tokens"] as? Int) ?? 0,
+            outputTokens: (usage["completion_tokens"] as? Int) ?? 0,
+            costUSD: reportedCost(usage)
+        )
+    }
+
+    private func messageText(_ message: [String: Any]) -> String {
+        if let s = message["content"] as? String { return s }
+        if let arr = message["content"] as? [[String: Any]] {
+            return arr.compactMap { $0["text"] as? String }.joined()
+        }
+        return ""
+    }
+
     // MARK: - Fingerprint analysis (vision)
 
     func analyzeMealFingerprint(imageJPEG: Data) async throws -> MealFingerprintAnalysis {
-        guard let key = Keychain.get(.openRouterAPIKey), !key.isEmpty else {
-            throw OpenRouterError.missingAPIKey
-        }
-
         let b64 = imageJPEG.base64EncodedString()
         let content: [[String: Any]] = [
             ["type": "text", "text": userPrompt],
@@ -87,67 +169,23 @@ final class OpenRouterClient {
             "temperature": 0.1,
         ]
 
-        var request = URLRequest(url: HealthThresholds.OpenRouter.endpoint)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(key)",                                    forHTTPHeaderField: "Authorization")
-        request.setValue("application/json",                                  forHTTPHeaderField: "Content-Type")
-        request.setValue(HealthThresholds.OpenRouter.httpReferer,             forHTTPHeaderField: "HTTP-Referer")
-        request.setValue(HealthThresholds.OpenRouter.appTitle,                forHTTPHeaderField: "X-Title")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw OpenRouterError.malformedResponse("No HTTPURLResponse")
-        }
-        if !(200...299).contains(http.statusCode) {
-            let bodyText = String(data: data, encoding: .utf8) ?? ""
-            throw OpenRouterError.http(http.statusCode, bodyText)
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw OpenRouterError.malformedResponse("Top-level JSON")
-        }
-        let usedModel = (json["model"] as? String) ?? model
-        let usage = json["usage"] as? [String: Any] ?? [:]
-        let inputTokens  = (usage["prompt_tokens"]     as? Int) ?? 0
-        let outputTokens = (usage["completion_tokens"] as? Int) ?? 0
-        let cost = reportedCost(usage)
-
-        guard
-            let choices = json["choices"] as? [[String: Any]],
-            let first = choices.first,
-            let message = first["message"] as? [String: Any]
-        else {
-            throw OpenRouterError.malformedResponse("choices/message")
-        }
-
-        let contentString: String = {
-            if let s = message["content"] as? String { return s }
-            if let arr = message["content"] as? [[String: Any]] {
-                return arr.compactMap { $0["text"] as? String }.joined()
-            }
-            return ""
-        }()
-
+        let response = try await complete(body)
+        let contentString = messageText(response.message)
         guard !contentString.isEmpty else { throw OpenRouterError.noContent }
 
         let parsed = try Self.parseFingerprint(contentString)
         return MealFingerprintAnalysis(
             fingerprint: parsed,
-            model: usedModel,
-            inputTokens: inputTokens,
-            outputTokens: outputTokens,
-            costUSD: cost
+            model: response.model,
+            inputTokens: response.inputTokens,
+            outputTokens: response.outputTokens,
+            costUSD: response.costUSD
         )
     }
 
     // MARK: - Exercise icon image generation
 
     func generateExerciseImage(exerciseName: String) async throws -> GeneratedExerciseImage {
-        guard let key = Keychain.get(.openRouterAPIKey), !key.isEmpty else {
-            throw OpenRouterError.missingAPIKey
-        }
-
         let prompt = """
         Generate an exercise-diagram illustration for the strength/fitness exercise: "\(exerciseName)", in the style used by professional gym exercise guides.
         Style requirements (apply to every image so the icon set looks uniform):
@@ -169,41 +207,9 @@ final class OpenRouterClient {
             "modalities": ["image", "text"],
         ]
 
-        var request = URLRequest(url: HealthThresholds.OpenRouter.endpoint)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(key)",                                    forHTTPHeaderField: "Authorization")
-        request.setValue("application/json",                                  forHTTPHeaderField: "Content-Type")
-        request.setValue(HealthThresholds.OpenRouter.httpReferer,             forHTTPHeaderField: "HTTP-Referer")
-        request.setValue(HealthThresholds.OpenRouter.appTitle,                forHTTPHeaderField: "X-Title")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let response = try await complete(body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw OpenRouterError.malformedResponse("No HTTPURLResponse")
-        }
-        if !(200...299).contains(http.statusCode) {
-            let bodyText = String(data: data, encoding: .utf8) ?? ""
-            throw OpenRouterError.http(http.statusCode, bodyText)
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw OpenRouterError.malformedResponse("Top-level JSON")
-        }
-        let usedModel = (json["model"] as? String) ?? model
-        let usage = json["usage"] as? [String: Any] ?? [:]
-        let inputTokens  = (usage["prompt_tokens"]     as? Int) ?? 0
-        let outputTokens = (usage["completion_tokens"] as? Int) ?? 0
-        let cost = reportedCost(usage)
-
-        guard
-            let choices = json["choices"] as? [[String: Any]],
-            let first   = choices.first,
-            let message = first["message"] as? [String: Any]
-        else {
-            throw OpenRouterError.malformedResponse("choices/message")
-        }
-
-        guard let dataURL = extractImageDataURL(from: message) else {
+        guard let dataURL = extractImageDataURL(from: response.message) else {
             throw OpenRouterError.malformedResponse("No image in response")
         }
         guard let imageData = decodeDataURL(dataURL) else {
@@ -212,10 +218,10 @@ final class OpenRouterClient {
 
         return GeneratedExerciseImage(
             imageData: imageData,
-            model: usedModel,
-            inputTokens: inputTokens,
-            outputTokens: outputTokens,
-            costUSD: cost
+            model: response.model,
+            inputTokens: response.inputTokens,
+            outputTokens: response.outputTokens,
+            costUSD: response.costUSD
         )
     }
 
@@ -250,10 +256,6 @@ final class OpenRouterClient {
     /// the fixed `MuscleGroup` vocabulary. A cheap text call (~a few hundred
     /// tokens) fired once per exercise — deterministic buckets, no manual tagging.
     func classifyExerciseMuscles(exerciseName: String) async throws -> ExerciseMuscleClassification {
-        guard let key = Keychain.get(.openRouterAPIKey), !key.isEmpty else {
-            throw OpenRouterError.missingAPIKey
-        }
-
         let body: [String: Any] = [
             "model": model,
             "messages": [
@@ -265,58 +267,18 @@ final class OpenRouterClient {
             "temperature": 0.0,
         ]
 
-        var request = URLRequest(url: HealthThresholds.OpenRouter.endpoint)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(key)",                         forHTTPHeaderField: "Authorization")
-        request.setValue("application/json",                       forHTTPHeaderField: "Content-Type")
-        request.setValue(HealthThresholds.OpenRouter.httpReferer,  forHTTPHeaderField: "HTTP-Referer")
-        request.setValue(HealthThresholds.OpenRouter.appTitle,     forHTTPHeaderField: "X-Title")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw OpenRouterError.malformedResponse("No HTTPURLResponse")
-        }
-        if !(200...299).contains(http.statusCode) {
-            let bodyText = String(data: data, encoding: .utf8) ?? ""
-            throw OpenRouterError.http(http.statusCode, bodyText)
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw OpenRouterError.malformedResponse("Top-level JSON")
-        }
-        let usedModel = (json["model"] as? String) ?? model
-        let usage = json["usage"] as? [String: Any] ?? [:]
-        let inputTokens  = (usage["prompt_tokens"]     as? Int) ?? 0
-        let outputTokens = (usage["completion_tokens"] as? Int) ?? 0
-        let cost = reportedCost(usage)
-
-        guard
-            let choices = json["choices"] as? [[String: Any]],
-            let first = choices.first,
-            let message = first["message"] as? [String: Any]
-        else {
-            throw OpenRouterError.malformedResponse("choices/message")
-        }
-
-        let contentString: String = {
-            if let s = message["content"] as? String { return s }
-            if let arr = message["content"] as? [[String: Any]] {
-                return arr.compactMap { $0["text"] as? String }.joined()
-            }
-            return ""
-        }()
-
+        let response = try await complete(body)
+        let contentString = messageText(response.message)
         guard !contentString.isEmpty else { throw OpenRouterError.noContent }
 
         let (primary, secondary) = try parseMuscleClassification(contentString)
         return ExerciseMuscleClassification(
             primary: primary,
             secondary: secondary,
-            model: usedModel,
-            inputTokens: inputTokens,
-            outputTokens: outputTokens,
-            costUSD: cost
+            model: response.model,
+            inputTokens: response.inputTokens,
+            outputTokens: response.outputTokens,
+            costUSD: response.costUSD
         )
     }
 

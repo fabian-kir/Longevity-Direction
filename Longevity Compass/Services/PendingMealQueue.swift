@@ -35,6 +35,10 @@ final class PendingMealQueue {
 
     static let maxAttempts = 5
 
+    /// False while the user hasn't allowed sending meal photos to the AI provider.
+    /// Queued photos then wait on the device and are never uploaded.
+    var isAISharingAllowed: Bool { openRouter.consent.isGranted }
+
     init(openRouter: OpenRouterClient, onEntryReady: @escaping (NutritionEntry) async -> Void) {
         self.openRouter = openRouter
         self.onEntryReady = onEntryReady
@@ -91,6 +95,8 @@ final class PendingMealQueue {
     func processQueue(includeExhausted: Bool = false) async {
         guard !isProcessing else { return }
         guard isOnline else { return }
+        // Photos stay on the device until the user allows sharing with AI.
+        guard isAISharingAllowed else { return }
         isProcessing = true
         defer {
             isProcessing = false
@@ -104,6 +110,8 @@ final class PendingMealQueue {
             !tried.contains($0.id) && (includeExhausted || $0.attempts < Self.maxAttempts)
         }) {
             tried.insert(queued.id)
+            // Sharing withdrawn mid-run: stop before sending the next photo.
+            guard isAISharingAllowed else { break }
             guard let image = image(for: queued) else {
                 remove(queued)
                 continue
